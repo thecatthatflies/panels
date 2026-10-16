@@ -620,10 +620,10 @@ final class TerminalNSView: NSView {
                 return true
             case "v": paste(nil); return true
             case "a": selectAll(nil); return true
-            case "k": clearBuffer(); return true
             default: break
             }
         }
+        if flags == [.command, .option], key == "k" { clearBuffer(); return true }
         // Cmd + arrows/backspace are terminal line editing keys
         if [123, 124, 51].contains(event.keyCode) && flags == .command {
             keyDown(with: event)
@@ -892,14 +892,22 @@ struct TerminalRepresentable: NSViewRepresentable {
     let panel: Panel
     let theme: Theme
 
-    func makeNSView(context: Context) -> TerminalNSView {
+    func makeNSView(context: Context) -> HostContainer {
         let controller = Runtime.shared.terminal(for: panel)
         controller.apply(settings: panel.settings, theme: theme)
-        return controller.view
+        let c = HostContainer()
+        c.attach(controller.view, steal: true)
+        return c
     }
 
-    func updateNSView(_ view: TerminalNSView, context: Context) {
-        Runtime.shared.terminal(for: panel).apply(settings: panel.settings, theme: theme)
+    func updateNSView(_ container: HostContainer, context: Context) {
+        let controller = Runtime.shared.terminal(for: panel)
+        container.attach(controller.view, steal: false)
+        controller.apply(settings: panel.settings, theme: theme)
+    }
+
+    static func dismantleNSView(_ container: HostContainer, coordinator: ()) {
+        container.release()
     }
 }
 

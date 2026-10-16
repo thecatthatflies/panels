@@ -80,12 +80,27 @@ struct WindowConfigurator: NSViewRepresentable {
 
 enum WindowChrome {
     private static var observed = Set<ObjectIdentifier>()
+    private static var lockRevealed = false
+
+    // Metrics. The lights sit the same distance from the top and left edges so the corner reads as one
+    // deliberate inset, and the top bar derives its own leading gap from them instead of a magic number.
+    static let buttonSize: CGFloat = 14
+    static let spacing: CGFloat = 8
+    static let barHeight: CGFloat = 46
+    static var normalInset: CGFloat { (barHeight - buttonSize) / 2 }
+    static let lockedInset: CGFloat = 12
+    static let lockedSpacing: CGFloat = 7
+    static var lightsExtent: CGFloat { 3 * buttonSize + 2 * spacing }
+    static var barLeadingGap: CGFloat { normalInset + lightsExtent + 14 }
+
+    private static let kinds: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
 
     static func install(on window: NSWindow) {
         layoutTrafficLights(window)
         let key = ObjectIdentifier(window)
         guard !observed.contains(key) else { return }
         observed.insert(key)
+        window.acceptsMouseMovedEvents = true
         let nc = NotificationCenter.default
         for name in [NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification,
                      NSWindow.didExitFullScreenNotification, NSWindow.didBecomeKeyNotification] {
@@ -93,17 +108,58 @@ enum WindowChrome {
         }
     }
 
-    static func layoutTrafficLights(_ window: NSWindow) {
-        let kinds: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
-        let barHeight: CGFloat = 46
-        for (i, kind) in kinds.enumerated() {
-            guard let b = window.standardWindowButton(kind), let sup = b.superview else { continue }
-            let size = b.frame.size
-            let x: CGFloat = 20 + CGFloat(i) * (size.width + 8)
-            let topInset = (barHeight - size.height) / 2
-            let y = sup.frame.height - topInset - size.height
-            b.setFrameOrigin(NSPoint(x: x, y: y))
+    /// Positions the lights for the current mode. Lock In pulls them tighter into the corner and hides them
+    /// until the pointer visits the top-left, so the full window height belongs to the work.
+    static func layoutTrafficLights(_ window: NSWindow, animated: Bool = false) {
+        let locked = Workspace.shared.focusMode
+        let inset = locked ? lockedInset : normalInset
+        let gap = locked ? lockedSpacing : spacing
+
+        func place() {
+            for (i, kind) in kinds.enumerated() {
+                guard let b = window.standardWindowButton(kind), let sup = b.superview else { continue }
+                let x = inset + CGFloat(i) * (buttonSize + gap)
+                let y = sup.frame.height - inset - buttonSize
+                let target = NSPoint(x: x, y: y)
+                if animated { b.animator().setFrameOrigin(target) } else { b.setFrameOrigin(target) }
+            }
         }
+
+        if animated {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.45
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                ctx.allowsImplicitAnimation = true
+                place()
+            }
+        } else {
+            place()
+        }
+    }
+
+    static func refresh(animated: Bool) {
+        for w in NSApp.windows where w.standardWindowButton(.closeButton) != nil {
+            layoutTrafficLights(w, animated: animated)
+        }
+    }
+
+    static func setTrafficLights(hidden: Bool) {
+        lockRevealed = !hidden
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.35
+            for w in NSApp.windows {
+                for k in kinds { w.standardWindowButton(k)?.animator().alphaValue = hidden ? 0 : 1 }
+            }
+        }
+    }
+
+    /// While locked in, reveal the lights when the pointer enters the top-left corner and hide them again after.
+    static func updateLockHover(for event: NSEvent) {
+        guard Workspace.shared.focusMode, let window = event.window, let content = window.contentView else { return }
+        let p = event.locationInWindow
+        let zoneW = lockedInset + lightsExtent + 36
+        let inZone = p.x < zoneW && p.y > content.bounds.height - (lockedInset + buttonSize + 20)
+        if inZone != lockRevealed { setTrafficLights(hidden: !inZone) }
     }
 }
 
@@ -329,5 +385,62 @@ struct KeyCap: View {
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
             .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(theme.hover))
+    }
+}
+
+
+// MARK: - Text prompt
+
+enum Prompt {
+    /// Runs a small modal asking for a line of text. Returns nil when cancelled.
+    static func text(title: String, message: String, defaultValue: String = "", confirm: String = "Save") -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: confirm)
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.stringValue = defaultValue
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return field.stringValue.trimmingCharacters(in: .whitespaces)
+    }
+}
+
+
+// MARK: - Reparent-safe native host
+
+/// Wraps a cached native view (terminal, web view, editor). During SwiftUI transitions two
+/// representables can briefly refer to the same child; the newest container wins and an old
+/// container going away never rips the child out of its new home.
+final class HostContainer: NSView {
+    private weak var child: NSView?
+
+    override var isFlipped: Bool { true }
+
+    func attach(_ view: NSView, steal: Bool) {
+        if view.superview === self { child = view; return }
+        guard steal || view.superview == nil else { return }
+        view.removeFromSuperview()
+        view.frame = bounds
+        view.autoresizingMask = [.width, .height]
+        addSubview(view)
+        child = view
+    }
+
+    func release() {
+        if let c = child, c.superview === self { c.removeFromSuperview() }
+        child = nil
+    }
+
+    override func layout() {
+        super.layout()
+        if let c = child, c.superview === self, c.frame != bounds { c.frame = bounds }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if let c = child, c.superview === self { c.frame = bounds }
     }
 }

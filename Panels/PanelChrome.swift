@@ -13,13 +13,17 @@ struct PanelView: View {
     @State private var showSettings = false
     @State private var renaming = false
     @State private var zone: DropZone?
+    @State private var appeared = false
+    @State private var settingsPulse = 0
     @FocusState private var titleFocused: Bool
 
     private var isFocused: Bool { ws.space.focusedID == panel.id }
     private var accent: Color { theme.accent(panel.settings.accent) }
-    private var radius: CGFloat { CGFloat(appearance.cornerRadius) }
+    private var locked: Bool { ws.focusMode }
+    private var radius: CGFloat { CGFloat(appearance.cornerRadius) + (locked ? 6 : 0) }
+    private var order: Int { ws.space.panels.firstIndex { $0.id == panel.id } ?? 0 }
     private var isZoomed: Bool { ws.space.zoomedID == panel.id }
-    private var showActions: Bool { hovering || showSettings || isFocused }
+    private var showActions: Bool { !locked && (hovering || showSettings || isFocused) }
     private var surfaceColor: Color { panel.kind == .terminal ? Color(hex: theme.termBackground) : theme.surfaceC }
 
     var body: some View {
@@ -33,13 +37,29 @@ struct PanelView: View {
         .background { surfaceBackground(shape) }
         .clipShape(shape)
         .overlay {
-            shape.strokeBorder(isFocused ? accent.opacity(0.65) : theme.hairline, lineWidth: 1)
+            shape.strokeBorder(locked ? Color.clear : (isFocused ? accent.opacity(0.65) : theme.hairline), lineWidth: 1)
         }
         .overlay { dragLayer(shape) }
-        .shadow(color: theme.shadow.opacity(isFocused ? 0.9 : 0.5), radius: isFocused ? 14 : 8, y: isFocused ? 6 : 3)
+        .shadow(color: locked ? .clear : theme.shadow.opacity(isFocused ? 0.9 : 0.5),
+                radius: isFocused ? 14 : 8, y: isFocused ? 6 : 3)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ws.frames[panel.id] = $0 }
         .onHover { hovering = $0 }
         .animation(.snappy(duration: 0.22), value: isFocused)
+        .scaleEffect(appeared ? 1 : 0.965)
+        .opacity(appeared ? 1 : 0)
+        .onAppear {
+            withAnimation(.spring(response: 0.46, dampingFraction: 0.84).delay(Double(order) * 0.05)) { appeared = true }
+        }
+        .onChange(of: ws.settingsRequest) { _, id in
+            if id == panel.id { showSettings = true; ws.settingsRequest = nil }
+        }
+        .onChange(of: ws.renameRequest) { _, id in
+            if id == panel.id {
+                renaming = true
+                ws.renameRequest = nil
+                DispatchQueue.main.async { titleFocused = true }
+            }
+        }
         .environment(\.theme, theme)
     }
 
@@ -119,7 +139,7 @@ struct PanelView: View {
 
             Spacer(minLength: 8)
 
-            if panel.kind == .note && (showActions || isFocused) {
+            if panel.kind == .note && !locked && (showActions || isFocused) {
                 NoteModePicker(panel: panel, accent: accent)
                     .transition(.opacity)
             }
@@ -131,9 +151,11 @@ struct PanelView: View {
                 IconMenu(symbol: "rectangle.split.1x2", help: "Split down (Cmd Shift D)") {
                     splitMenu(axis: .vertical)
                 }
-                IconButton(symbol: "slider.horizontal.3", help: "Panel settings", active: showSettings, tint: accent) {
+                IconButton(symbol: "slider.horizontal.3", help: "Panel settings (Cmd Option I)", active: showSettings, tint: accent) {
+                    settingsPulse += 1
                     showSettings.toggle()
                 }
+                .symbolEffect(.bounce, value: settingsPulse)
                 .popover(isPresented: $showSettings, arrowEdge: .bottom) {
                     PanelSettingsView(panel: panel)
                         .environment(\.theme, theme)
@@ -147,10 +169,13 @@ struct PanelView: View {
                 }
             }
             .opacity(showActions ? 1 : 0)
-            .animation(.snappy(duration: 0.18), value: showActions)
+            .offset(x: showActions ? 0 : 8)
+            .blur(radius: showActions ? 0 : 2)
+            .animation(.snappy(duration: 0.22), value: showActions)
         }
         .padding(.horizontal, 12)
-        .frame(height: 38)
+        .frame(height: locked ? 30 : 38)
+        .opacity(locked ? 0.55 : 1)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
             renaming = true
@@ -174,6 +199,14 @@ struct PanelView: View {
             Button("Rename") { renaming = true; DispatchQueue.main.async { titleFocused = true } }
             Button("Duplicate") { ws.duplicate(panel.id) }
             Button(isZoomed ? "Restore" : "Zoom") { ws.toggleZoom(panel.id) }
+            if ws.spaces.count > 1 {
+                Menu("Move to Workspace") {
+                    ForEach(ws.spaces.filter { $0.id != ws.activeSpaceID }) { sp in
+                        Button { ws.move(panel: panel.id, toSpace: sp.id) } label: { Label(sp.name, systemImage: sp.symbol) }
+                    }
+                }
+            }
+            if panel.kind == .note { Button("Save as Markdown...") { FileOps.saveMarkdown(panel) } }
             Divider()
             Button("Close", role: .destructive) { ws.close(panel.id) }
         }

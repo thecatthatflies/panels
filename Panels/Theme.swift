@@ -182,6 +182,11 @@ final class Appearance {
         systemDark = (name ?? .darkAqua) == .darkAqua
     }
 
+    func theme(for space: Space) -> Theme {
+        if let id = space.themeID, let t = Theme.all.first(where: { $0.id == id }) { return t }
+        return theme
+    }
+
     var theme: Theme {
         switch choice {
         case .auto: return systemDark ? .granite : .paleSky

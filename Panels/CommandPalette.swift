@@ -38,12 +38,18 @@ struct CommandPalette: View {
                                    symbol: kind.symbol, keywords: "add create panel \(kind.rawValue)",
                                    shortcut: kind == .note ? "Cmd N" : (kind == .terminal ? "Cmd T" : nil)) { ws.addPanel(kind) })
         }
-        for preset in WebPreset.all {
-            out.append(PaletteItem(id: "web-\(preset.id)", title: "Open \(preset.name)", subtitle: preset.url,
-                                   symbol: preset.symbol, keywords: "web app browser site", shortcut: nil) {
-                ws.addPanel(.web, url: preset.url, title: preset.name)
+        for site in SiteLibrary.shared.sites {
+            out.append(PaletteItem(id: "site-\(site.id)", title: "Open \(site.name)", subtitle: site.url,
+                                   symbol: site.symbol, keywords: "web app browser site open", shortcut: nil) {
+                ws.openSite(site)
             })
         }
+        out.append(PaletteItem(id: "add-site", title: "Add Website...", subtitle: "Save a site to your library",
+                               symbol: "plus.circle", keywords: "new site bookmark web app", shortcut: nil) {
+            SettingsRouter.shared.show(.sites, site: SiteLibrary.shared.add().id)
+        })
+        out.append(PaletteItem(id: "lock-in", title: ws.focusMode ? "Leave Lock In" : "Lock In", subtitle: "Hide everything but the work",
+                               symbol: "scope", keywords: "focus zen distraction typewriter", shortcut: "Cmd Shift L") { ws.toggleFocusMode() })
         if let f = ws.focused {
             out.append(PaletteItem(id: "split-right", title: "Split Right", subtitle: "Add a note beside \(f.title)",
                                    symbol: "rectangle.split.2x1", keywords: "divide horizontal", shortcut: "Cmd D") {
@@ -69,15 +75,31 @@ struct CommandPalette: View {
             }
         }
         out.append(PaletteItem(id: "equalize", title: "Even Out Sizes", subtitle: "Give every panel equal room",
-                               symbol: "equal.square", keywords: "balance resize reset", shortcut: "Cmd =") { ws.equalize() })
+                               symbol: "equal.square", keywords: "balance resize reset", shortcut: "Cmd Option =") { ws.equalize() })
         for preset in LayoutPreset.allCases {
             out.append(PaletteItem(id: "layout-\(preset.rawValue)", title: "Layout: \(preset.label)", subtitle: "Rearrange the current space",
                                    symbol: preset.symbol, keywords: "arrange preset grid", shortcut: nil) { ws.apply(preset) })
         }
-        out.append(PaletteItem(id: "new-space", title: "New Space", subtitle: "A fresh canvas of panels",
-                               symbol: "plus.rectangle.on.rectangle", keywords: "workspace page tab", shortcut: "Cmd Shift N") { ws.newSpace() })
+        out.append(PaletteItem(id: "new-space", title: "New Workspace", subtitle: "A fresh canvas of panels",
+                               symbol: "plus.rectangle.on.rectangle", keywords: "space page tab", shortcut: "Cmd Shift N") { ws.newSpace() })
+        out.append(PaletteItem(id: "dup-space", title: "Duplicate Workspace", subtitle: ws.space.name,
+                               symbol: "plus.square.on.square", keywords: "copy clone space", shortcut: nil) { ws.duplicateSpace(ws.activeSpaceID) })
+        for t in TemplateStore.shared.all {
+            out.append(PaletteItem(id: "tpl-\(t.id)", title: "New Workspace: \(t.name)", subtitle: "From template",
+                                   symbol: t.symbol, keywords: "template layout start", shortcut: nil) { ws.newSpace(from: t) })
+        }
+        out.append(PaletteItem(id: "save-tpl", title: "Save Layout as Template...", subtitle: "Reuse this arrangement",
+                               symbol: "square.and.arrow.down", keywords: "template store", shortcut: nil) {
+            if let name = Prompt.text(title: "Save Layout as Template", message: "Name this layout.", defaultValue: ws.space.name) {
+                ws.saveTemplate(named: name)
+            }
+        })
+        out.append(PaletteItem(id: "open-file", title: "Open Markdown File...", subtitle: "Open a file as a note",
+                               symbol: "doc.text", keywords: "import md", shortcut: "Cmd O") { FileOps.openMarkdown() })
+        out.append(PaletteItem(id: "settings", title: "Settings", subtitle: "Appearance, sites, updates",
+                               symbol: "gearshape", keywords: "preferences options", shortcut: "Cmd ,") { SettingsRouter.shared.show(.general) })
         for (i, s) in ws.spaces.enumerated() where s.id != ws.activeSpaceID {
-            out.append(PaletteItem(id: "space-\(s.id)", title: "Go to \(s.name)", subtitle: "Space \(i + 1)",
+            out.append(PaletteItem(id: "space-\(s.id)", title: "Go to \(s.name)", subtitle: "Workspace \(i + 1)",
                                    symbol: "rectangle.on.rectangle", keywords: "switch workspace", shortcut: i < 9 ? "Cmd \(i + 1)" : nil) {
                 ws.selectSpace(s.id)
             })

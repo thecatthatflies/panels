@@ -90,12 +90,9 @@ enum Direction {
 // MARK: - Per-panel settings
 
 struct PanelSettings: Codable, Equatable {
-    // shared
     var accent: AccentID = .theme
     var surface: SurfaceStyle = .solid
     var padding: Double = 22
-
-    // note
     var font: EditorFont = .instrument
     var fontSize: Double = 15
     var lineHeight: Double = 1.5
@@ -105,28 +102,42 @@ struct PanelSettings: Codable, Equatable {
     var spellcheck: Bool = false
     var showStats: Bool = true
     var noteMode: NoteMode = .edit
-
-    // terminal
+    var typewriter: Bool = false
+    var dimParagraphs: Bool = false
+    var autoTitle: Bool = true
+    var paragraphSpacing: Double = 0.2
+    var headingScale: Double = 1.0
+    var codeScale: Double = 0.88
     var termFontSize: Double = 12.5
     var cursor: CursorStyle = .block
     var shell: String = ""
     var termOpacity: Double = 1.0
-
-    // web
+    var termFont: String = ""
+    var termLineHeight: Double = 1.14
+    var startDirectory: String = ""
+    var startCommand: String = ""
+    var optionAsMeta: Bool = true
+    var cursorBlink: Bool = true
+    var scrollbackLines: Int = 5000
     var zoom: Double = 1.0
     var mobileUA: Bool = false
     var showAddressBar: Bool = true
-
-    // timer
+    var customCSS: String = ""
+    var forceDark: Bool = false
+    var blockTrackers: Bool = false
+    var appMode: Bool = false
+    var isolatedSession: Bool = false
+    var refreshMinutes: Int = 0
+    var siteID: UUID? = nil
+    var hideDone: Bool = false
     var focusMinutes: Int = 25
     var breakMinutes: Int = 5
+    var longBreakMinutes: Int = 15
+    var sessionsBeforeLong: Int = 4
+    var timerSound: Bool = true
 
     enum CodingKeys: String, CodingKey {
-        case accent, surface, padding
-        case font, fontSize, lineHeight, measure, wrap, richStyling, spellcheck, showStats, noteMode
-        case termFontSize, cursor, shell, termOpacity
-        case zoom, mobileUA, showAddressBar
-        case focusMinutes, breakMinutes
+        case accent, surface, padding, font, fontSize, lineHeight, measure, wrap, richStyling, spellcheck, showStats, noteMode, typewriter, dimParagraphs, autoTitle, paragraphSpacing, headingScale, codeScale, termFontSize, cursor, shell, termOpacity, termFont, termLineHeight, startDirectory, startCommand, optionAsMeta, cursorBlink, scrollbackLines, zoom, mobileUA, showAddressBar, customCSS, forceDark, blockTrackers, appMode, isolatedSession, refreshMinutes, siteID, hideDone, focusMinutes, breakMinutes, longBreakMinutes, sessionsBeforeLong, timerSound
     }
 
     init() {}
@@ -148,15 +159,39 @@ struct PanelSettings: Codable, Equatable {
         spellcheck = v(.spellcheck, spellcheck)
         showStats = v(.showStats, showStats)
         noteMode = v(.noteMode, noteMode)
+        typewriter = v(.typewriter, typewriter)
+        dimParagraphs = v(.dimParagraphs, dimParagraphs)
+        autoTitle = v(.autoTitle, autoTitle)
+        paragraphSpacing = v(.paragraphSpacing, paragraphSpacing)
+        headingScale = v(.headingScale, headingScale)
+        codeScale = v(.codeScale, codeScale)
         termFontSize = v(.termFontSize, termFontSize)
         cursor = v(.cursor, cursor)
         shell = v(.shell, shell)
         termOpacity = v(.termOpacity, termOpacity)
+        termFont = v(.termFont, termFont)
+        termLineHeight = v(.termLineHeight, termLineHeight)
+        startDirectory = v(.startDirectory, startDirectory)
+        startCommand = v(.startCommand, startCommand)
+        optionAsMeta = v(.optionAsMeta, optionAsMeta)
+        cursorBlink = v(.cursorBlink, cursorBlink)
+        scrollbackLines = v(.scrollbackLines, scrollbackLines)
         zoom = v(.zoom, zoom)
         mobileUA = v(.mobileUA, mobileUA)
         showAddressBar = v(.showAddressBar, showAddressBar)
+        customCSS = v(.customCSS, customCSS)
+        forceDark = v(.forceDark, forceDark)
+        blockTrackers = v(.blockTrackers, blockTrackers)
+        appMode = v(.appMode, appMode)
+        isolatedSession = v(.isolatedSession, isolatedSession)
+        refreshMinutes = v(.refreshMinutes, refreshMinutes)
+        siteID = (try? c.decodeIfPresent(UUID.self, forKey: .siteID)) ?? nil
+        hideDone = v(.hideDone, hideDone)
         focusMinutes = v(.focusMinutes, focusMinutes)
         breakMinutes = v(.breakMinutes, breakMinutes)
+        longBreakMinutes = v(.longBreakMinutes, longBreakMinutes)
+        sessionsBeforeLong = v(.sessionsBeforeLong, sessionsBeforeLong)
+        timerSound = v(.timerSound, timerSound)
     }
 }
 
@@ -335,15 +370,21 @@ final class Space: Identifiable, Codable {
     var root: Node
     var zoomedID: UUID?
     var focusedID: UUID?
+    var symbol: String { didSet { Persistence.markDirty() } }
+    var tint: AccentID { didSet { Persistence.markDirty() } }
+    var themeID: String? { didSet { Persistence.markDirty() } }
 
-    init(name: String, root: Node) {
+    init(name: String, root: Node, symbol: String = "square.grid.2x2", tint: AccentID = .theme, themeID: String? = nil) {
         id = UUID()
         self.name = name
         self.root = root
+        self.symbol = symbol
+        self.tint = tint
+        self.themeID = themeID
         focusedID = root.leaves().first?.panel?.id
     }
 
-    enum CodingKeys: String, CodingKey { case id, name, root, focusedID }
+    enum CodingKeys: String, CodingKey { case id, name, root, focusedID, symbol, tint, themeID }
 
     required init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -351,6 +392,9 @@ final class Space: Identifiable, Codable {
         name = try c.decode(String.self, forKey: .name)
         root = try c.decode(Node.self, forKey: .root)
         focusedID = try? c.decodeIfPresent(UUID.self, forKey: .focusedID)
+        symbol = (try? c.decode(String.self, forKey: .symbol)) ?? "square.grid.2x2"
+        tint = (try? c.decode(AccentID.self, forKey: .tint)) ?? .theme
+        themeID = try? c.decodeIfPresent(String.self, forKey: .themeID)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -359,6 +403,9 @@ final class Space: Identifiable, Codable {
         try c.encode(name, forKey: .name)
         try c.encode(root, forKey: .root)
         try c.encodeIfPresent(focusedID, forKey: .focusedID)
+        try c.encode(symbol, forKey: .symbol)
+        try c.encode(tint, forKey: .tint)
+        try c.encodeIfPresent(themeID, forKey: .themeID)
     }
 
     var panels: [Panel] { root.leaves().compactMap { $0.panel } }
@@ -433,6 +480,14 @@ final class Workspace {
     var paletteOpen = false
     var toast: String?
     var draggingID: UUID?
+    var focusMode = false
+    var focusStart: Date?
+    var focusStartWords = 0
+    var settingsRequest: UUID?
+    var renameRequest: UUID?
+    var webEpoch: [UUID: Int] = [:]
+    var floating = false
+    @ObservationIgnored var preFocusZoom: UUID?
 
     @ObservationIgnored var frames: [UUID: CGRect] = [:]
     @ObservationIgnored private var toastTask: Task<Void, Never>?
@@ -519,9 +574,10 @@ final class Workspace {
     // MARK: structure
 
     @discardableResult
-    func addPanel(_ kind: PanelKind, url: String = "", title: String? = nil, text: String = "") -> Panel {
+    func addPanel(_ kind: PanelKind, url: String = "", title: String? = nil, text: String = "",
+                  settings: PanelSettings? = nil) -> Panel {
         let s = space
-        let panel = Panel(kind: kind, title: title, text: text, url: url)
+        let panel = Panel(kind: kind, title: title, text: text, url: url, settings: settings ?? PanelSettings())
         if kind == .web && url.isEmpty { panel.url = "" }
         withAnimation(.snappy(duration: 0.32)) {
             if s.root.isEmpty {
@@ -567,7 +623,7 @@ final class Workspace {
         return .horizontal
     }
 
-    private func insert(_ panel: Panel, beside target: Node, axis: SplitAxis, before: Bool, in s: Space) {
+    func insert(_ panel: Panel, beside target: Node, axis: SplitAxis, before: Bool, in s: Space) {
         let newLeaf = Node(panel: panel)
         if let (parent, idx) = s.root.parent(of: target), parent.axis == axis {
             let w = parent.weights[idx]

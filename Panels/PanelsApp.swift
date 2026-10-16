@@ -28,6 +28,8 @@ struct PanelsApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mouseMonitor: Any?
+    private var keyMonitor: Any?
+    private var moveMonitor: Any?
     private var appearanceObserver: NSKeyValueObservation?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -50,6 +52,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return event
         }
+
+        // Reveal the traffic lights when the pointer visits the top-left corner during Lock In.
+        moveMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { event in
+            WindowChrome.updateLockHover(for: event)
+            return event
+        }
+
+        // Escape leaves Lock In unless a terminal or web page needs the key.
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+            let ws = Workspace.shared
+            guard ws.focusMode, !ws.paletteOpen, event.keyCode == 53 else { return event }
+            let responder = event.window?.firstResponder
+            if responder is TerminalNSView || responder is PanelWebView { return event }
+            ws.exitFocusMode()
+            return nil
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -57,139 +75,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         Persistence.saveNow()
         Runtime.shared.terminateAll()
-    }
-}
-
-// MARK: - Menu commands
-
-struct PanelsCommands: Commands {
-    private let ws = Workspace.shared
-
-    var body: some Commands {
-        CommandGroup(after: .appInfo) {
-            Button("Check for Updates...") { Updater.shared.check(userInitiated: true) }
-        }
-
-        CommandGroup(replacing: .newItem) {
-            Button("New Note") { ws.addPanel(.note) }
-                .keyboardShortcut("n", modifiers: .command)
-            Button("New Terminal") { ws.addPanel(.terminal) }
-                .keyboardShortcut("t", modifiers: .command)
-            Button("New Web Panel") { ws.addPanel(.web) }
-                .keyboardShortcut("b", modifiers: [.command, .shift])
-            Menu("New Panel") {
-                ForEach(PanelKind.allCases) { kind in
-                    Button(kind.label) { ws.addPanel(kind) }
-                }
-            }
-            Divider()
-            Button("New Space") { ws.newSpace() }
-                .keyboardShortcut("n", modifiers: [.command, .shift])
-        }
-
-        CommandGroup(replacing: .saveItem) {
-            Button("Close Panel") { if let f = ws.focused { ws.close(f.id) } }
-                .keyboardShortcut("w", modifiers: .command)
-            Button("Close Space") { ws.closeSpace(ws.activeSpaceID) }
-                .keyboardShortcut("w", modifiers: [.command, .shift])
-        }
-
-        CommandMenu("Panel") {
-            Button("Command Palette") { ws.paletteOpen.toggle() }
-                .keyboardShortcut("k", modifiers: .command)
-            Divider()
-            Button("Split Right") { if let f = ws.focused { ws.split(f.id, axis: .horizontal, kind: .note) } }
-                .keyboardShortcut("d", modifiers: .command)
-            Button("Split Down") { if let f = ws.focused { ws.split(f.id, axis: .vertical, kind: .note) } }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
-            Button("Duplicate Panel") { if let f = ws.focused { ws.duplicate(f.id) } }
-                .keyboardShortcut("d", modifiers: [.command, .option])
-            Button("Zoom Panel") { ws.toggleZoom() }
-                .keyboardShortcut(.return, modifiers: [.command, .shift])
-            Button("Even Out Sizes") { ws.equalize() }
-                .keyboardShortcut("=", modifiers: .command)
-            Divider()
-            Button("Next Panel") { ws.cycleFocus(1) }
-                .keyboardShortcut("]", modifiers: .command)
-            Button("Previous Panel") { ws.cycleFocus(-1) }
-                .keyboardShortcut("[", modifiers: .command)
-            Button("Focus Left") { ws.focusDirection(.left) }
-                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
-            Button("Focus Right") { ws.focusDirection(.right) }
-                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
-            Button("Focus Up") { ws.focusDirection(.up) }
-                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
-            Button("Focus Down") { ws.focusDirection(.down) }
-                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
-            Divider()
-            Menu("Layout") {
-                ForEach(LayoutPreset.allCases) { preset in
-                    Button(preset.label) { ws.apply(preset) }
-                }
-            }
-        }
-
-        CommandMenu("Space") {
-            ForEach(1...9, id: \.self) { i in
-                Button("Space \(i)") { ws.selectSpace(index: i - 1) }
-                    .keyboardShortcut(KeyEquivalent(Character("\(i)")), modifiers: .command)
-            }
-        }
-    }
-}
-
-// MARK: - Settings window
-
-struct SettingsView: View {
-    private let appearance = Appearance.shared
-
-    var body: some View {
-        let theme = appearance.theme
-        @Bindable var a = appearance
-
-        VStack(alignment: .leading, spacing: 24) {
-            Text("Appearance")
-                .font(Typo.ui(18, bold: true))
-                .foregroundStyle(theme.textC)
-
-            SettingsSection(title: "Theme") {
-                SegmentedChips(options: ThemeChoice.allCases, selection: $a.choice, label: { $0.label })
-                HStack(spacing: 10) {
-                    ForEach(Theme.all) { t in
-                        VStack(spacing: 6) {
-                            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .fill(t.surfaceC)
-                                .frame(height: 44)
-                                .overlay(alignment: .bottomLeading) {
-                                    HStack(spacing: 3) {
-                                        Circle().fill(t.accentC).frame(width: 8, height: 8)
-                                        Capsule().fill(t.textC.opacity(0.5)).frame(width: 22, height: 3)
-                                    }
-                                    .padding(7)
-                                }
-                                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                    .strokeBorder(t.hairlineStrong, lineWidth: 1))
-                            Text(t.name).font(Typo.ui(11)).foregroundStyle(theme.mutedC)
-                        }
-                    }
-                }
-            }
-
-            SettingsSection(title: "Window") {
-                SliderRow(label: "Translucency", value: $a.translucency, range: 0.5...1, step: 0.01,
-                          format: { String(format: "%.0f%%", $0 * 100) })
-                SliderRow(label: "Panel gap", value: $a.gap, range: 2...20, step: 1,
-                          format: { String(format: "%.0f pt", $0) })
-                SliderRow(label: "Corner radius", value: $a.cornerRadius, range: 0...28, step: 1,
-                          format: { String(format: "%.0f pt", $0) })
-            }
-            UpdateSettingsSection()
-            Spacer()
-        }
-        .padding(26)
-        .frame(width: 460, height: 640)
-        .background(theme.surfaceC)
-        .environment(\.theme, theme)
-        .preferredColorScheme(theme.isDark ? .dark : .light)
     }
 }

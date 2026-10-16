@@ -57,6 +57,11 @@ final class Runtime {
         timers[id] = nil
     }
 
+    func releaseWeb(_ id: UUID) {
+        webs[id]?.webView.stopLoading()
+        webs[id] = nil
+    }
+
     func terminateAll() {
         terminals.values.forEach { $0.terminate() }
     }

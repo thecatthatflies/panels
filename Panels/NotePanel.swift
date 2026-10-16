@@ -384,8 +384,22 @@ struct MarkdownImage: View {
 struct NotePanelView: View {
     @Bindable var panel: Panel
     @Environment(\.theme) private var theme
+    private let ws = Workspace.shared
 
     private var accent: Color { theme.accent(panel.settings.accent) }
+
+    /// Settings as rendered. Lock In widens the margins, centers a reading column and turns on
+    /// typewriter scrolling and paragraph dimming without touching the saved panel settings.
+    private var eff: PanelSettings {
+        guard ws.focusMode else { return panel.settings }
+        var s = panel.settings
+        if s.measure == 0 { s.measure = 740 }
+        s.padding = max(s.padding, 44)
+        s.typewriter = true
+        s.dimParagraphs = true
+        s.showStats = false
+        return s
+    }
 
     private var stats: (words: Int, chars: Int, minutes: Int) {
         let t = panel.text
@@ -416,25 +430,28 @@ struct NotePanelView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if panel.settings.showStats { footer }
+            if eff.showStats { footer }
         }
     }
 
     private var editor: some View {
-        MarkdownEditor(panel: panel)
+        MarkdownEditor(panel: panel, settings: eff)
             .overlay(alignment: .topLeading) {
                 if panel.text.isEmpty {
                     Text("Start writing. Markdown works as you type.")
-                        .font(Font(panel.settings.font.regular(CGFloat(panel.settings.fontSize)) as CTFont))
+                        .font(Font(eff.font.regular(CGFloat(eff.fontSize)) as CTFont))
                         .foregroundStyle(theme.faintC)
-                        .padding(CGFloat(panel.settings.padding))
+                        .padding(CGFloat(eff.padding))
+                        .padding(.leading, eff.measure > 0 ? 0 : 0)
                         .allowsHitTesting(false)
+                        .transition(.opacity)
                 }
             }
+            .animation(.snappy(duration: 0.2), value: panel.text.isEmpty)
     }
 
     private var preview: some View {
-        MarkdownPreview(text: panel.text, settings: panel.settings, accent: accent) { line in
+        MarkdownPreview(text: panel.text, settings: eff, accent: accent) { line in
             toggleTask(at: line)
         }
     }

@@ -474,9 +474,17 @@ final class NoteScrollView: NSScrollView {
     var padding: CGFloat = 22 { didSet { needsLayout = true } }
     var measure: CGFloat = 0 { didSet { needsLayout = true } }
     var wrap: Bool = true { didSet { needsLayout = true } }
+    var typewriter: Bool = false { didSet { needsLayout = true } }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        needsLayout = true
+    }
 
     override func layout() {
         super.layout()
+        let bottom: CGFloat = typewriter ? max(contentSize.height * 0.45, 6) : 6
+        if contentInsets.bottom != bottom { contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: bottom, right: 0) }
         guard let tv = documentView as? PanelTextView else { return }
         let w = contentSize.width
         var h = padding
@@ -484,7 +492,8 @@ final class NoteScrollView: NSScrollView {
         let inset = NSSize(width: h, height: padding)
         if tv.textContainerInset != inset { tv.textContainerInset = inset }
         if wrap {
-            tv.textContainer?.containerSize = NSSize(width: max(w - inset.width * 2, 10), height: .greatestFiniteMagnitude)
+            if abs(tv.frame.width - w) > 0.5 { tv.setFrameSize(NSSize(width: w, height: tv.frame.height)) }
+            tv.textContainer?.containerSize = NSSize(width: max(w - inset.width * 2, 10), height: CGFloat.greatestFiniteMagnitude)
         }
     }
 }
@@ -498,6 +507,8 @@ final class NoteEditorHost: NSObject, NSTextViewDelegate, NSTextStorageDelegate 
     private var lastStyle: EditorStyle?
     private var lastWrap: Bool?
     private var applying = false
+    private var typewriter = false
+    private var dimOthers = false
 
     init(panel: Panel) {
         self.panel = panel
@@ -564,6 +575,10 @@ final class NoteEditorHost: NSObject, NSTextViewDelegate, NSTextStorageDelegate 
             isDark: theme.isDark
         )
 
+        let modeChanged = typewriter != st.typewriter || dimOthers != st.dimParagraphs
+        typewriter = st.typewriter
+        dimOthers = st.dimParagraphs
+        scrollView.typewriter = st.typewriter
         scrollView.padding = CGFloat(st.padding)
         scrollView.measure = CGFloat(st.measure)
         scrollView.wrap = st.wrap
@@ -606,6 +621,61 @@ final class NoteEditorHost: NSObject, NSTextViewDelegate, NSTextStorageDelegate 
             }
         }
         scrollView.needsLayout = true
+        if modeChanged || style != lastStyle { updateDim() }
+        if modeChanged && typewriter { DispatchQueue.main.async { self.centerCaret(animated: false) } }
+    }
+
+    // MARK: lock in helpers
+
+    private func updateDim() {
+        guard let lm = textView.layoutManager, let storage = textView.textStorage else { return }
+        let len = storage.length
+        let full = NSRange(location: 0, length: len)
+        lm.removeTemporaryAttribute(.foregroundColor, forCharacterRange: full)
+        guard dimOthers, len > 0, let style = lastStyle else { return }
+        let ns = storage.string as NSString
+        let sel = textView.selectedRange()
+        let para = ns.paragraphRange(for: NSRange(location: min(sel.location, max(len - 1, 0)), length: 0))
+        let dim = style.text.withAlphaComponent(style.isDark ? 0.28 : 0.34)
+        if para.location > 0 {
+            lm.addTemporaryAttribute(.foregroundColor, value: dim, forCharacterRange: NSRange(location: 0, length: para.location))
+        }
+        let end = NSMaxRange(para)
+        if end < len {
+            lm.addTemporaryAttribute(.foregroundColor, value: dim, forCharacterRange: NSRange(location: end, length: len - end))
+        }
+    }
+
+    private func centerCaret(animated: Bool = true) {
+        guard typewriter, let lm = textView.layoutManager, textView.textContainer != nil else { return }
+        let len = (textView.string as NSString).length
+        guard len > 0 else { return }
+        let sel = textView.selectedRange()
+        let charIndex = min(sel.location, len - 1)
+        let glyph = lm.glyphIndexForCharacter(at: charIndex)
+        var rect = lm.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        rect.origin.y += textView.textContainerOrigin.y
+        let visible = scrollView.contentView.bounds.height
+        let maxY = max(textView.frame.height - visible + scrollView.contentInsets.bottom, 0)
+        let target = min(max(rect.midY - visible * 0.42, 0), maxY)
+        let clip = scrollView.contentView
+        if abs(clip.bounds.origin.y - target) < 1 { return }
+        if animated {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.16
+                ctx.allowsImplicitAnimation = true
+                clip.animator().setBoundsOrigin(NSPoint(x: 0, y: target))
+            }
+        } else {
+            clip.setBoundsOrigin(NSPoint(x: 0, y: target))
+        }
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    func textViewDidChangeSelection(_ notification: Notification) {
+        guard !applying else { return }
+        if dimOthers { updateDim() }
+        if typewriter { centerCaret() }
     }
 
     func pushTextIfNeeded(_ text: String) {
@@ -637,18 +707,26 @@ final class NoteEditorHost: NSObject, NSTextViewDelegate, NSTextStorageDelegate 
 
 struct MarkdownEditor: NSViewRepresentable {
     @Bindable var panel: Panel
+    let settings: PanelSettings
     @Environment(\.theme) private var theme
 
-    func makeNSView(context: Context) -> NoteScrollView {
+    func makeNSView(context: Context) -> HostContainer {
         let host = Runtime.shared.noteHost(for: panel)
         host.pushTextIfNeeded(panel.text)
-        host.apply(settings: panel.settings, theme: theme)
-        return host.scrollView
+        host.apply(settings: settings, theme: theme)
+        let c = HostContainer()
+        c.attach(host.scrollView, steal: true)
+        return c
     }
 
-    func updateNSView(_ view: NoteScrollView, context: Context) {
+    func updateNSView(_ container: HostContainer, context: Context) {
         let host = Runtime.shared.noteHost(for: panel)
+        container.attach(host.scrollView, steal: false)
         host.pushTextIfNeeded(panel.text)
-        host.apply(settings: panel.settings, theme: theme)
+        host.apply(settings: settings, theme: theme)
+    }
+
+    static func dismantleNSView(_ container: HostContainer, coordinator: ()) {
+        container.release()
     }
 }
