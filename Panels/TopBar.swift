@@ -8,6 +8,8 @@ struct TopBar: View {
     private let templates = TemplateStore.shared
 
     @State private var renamingID: UUID?
+    @State private var hoverID: UUID?
+    @State private var customizeID: UUID?
     @FocusState private var renameFocused: Bool
     @Namespace private var pillNamespace
 
@@ -84,6 +86,8 @@ struct TopBar: View {
 
     // MARK: workspace pills
 
+    private var canClose: Bool { ws.spaces.count > 1 }
+
     @ViewBuilder
     private func spacePill(_ space: Space) -> some View {
         let active = space.id == ws.activeSpaceID
@@ -110,6 +114,20 @@ struct TopBar: View {
                     .foregroundStyle(active ? theme.textC : theme.mutedC)
                     .lineLimit(1)
             }
+
+            if canClose && (hoverID == space.id) && renamingID != space.id {
+                Button { ws.closeSpace(space.id) } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(theme.mutedC)
+                        .frame(width: 16, height: 16)
+                        .background(Circle().fill(theme.hover))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(PressStyle())
+                .help("Close workspace")
+                .transition(.scale(scale: 0.5).combined(with: .opacity))
+            }
         }
         .padding(.horizontal, 11)
         .frame(height: 26)
@@ -122,33 +140,29 @@ struct TopBar: View {
             }
         }
         .contentShape(Capsule())
-        .onTapGesture(count: 2) {
-            renamingID = space.id
-            DispatchQueue.main.async { renameFocused = true }
+        .onHover { inside in
+            withAnimation(Motion.quick) {
+                if inside { hoverID = space.id } else if hoverID == space.id { hoverID = nil }
+            }
         }
         .onTapGesture { ws.selectSpace(space.id) }
+        .simultaneousGesture(TapGesture(count: 2).onEnded {
+            renamingID = space.id
+            DispatchQueue.main.async { renameFocused = true }
+        })
         .contextMenu { spaceMenu(space) }
-        .animation(.snappy(duration: 0.28), value: active)
+        .popover(isPresented: Binding(get: { customizeID == space.id }, set: { if !$0 { customizeID = nil } }),
+                 arrowEdge: .bottom) {
+            WorkspaceCustomizer(space: space)
+                .environment(\.theme, theme)
+        }
+        .animation(Motion.quick, value: active)
     }
 
     @ViewBuilder
     private func spaceMenu(_ space: Space) -> some View {
         Button("Rename") { renamingID = space.id; DispatchQueue.main.async { renameFocused = true } }
-        Menu("Icon") {
-            ForEach(WorkspaceSymbols.all, id: \.self) { sym in
-                Button { space.symbol = sym } label: { Label(sym, systemImage: sym) }
-            }
-        }
-        Menu("Accent") {
-            ForEach(AccentID.allCases) { a in
-                Button(a.label) { space.tint = a }
-            }
-        }
-        Menu("Theme") {
-            Button("Follow App") { space.themeID = nil }
-            Divider()
-            ForEach(Theme.all) { t in Button(t.name) { space.themeID = t.id } }
-        }
+        Button("Icon, Color and Theme...") { customizeID = space.id }
         Divider()
         Button("Duplicate") { ws.duplicateSpace(space.id) }
         Button("Move Left") { ws.moveSpace(space.id, by: -1) }
@@ -187,12 +201,13 @@ struct TopBar: View {
             }
 
             IconMenu(symbol: "circle.lefthalf.filled", help: "Theme") {
-                ForEach(ThemeChoice.allCases) { choice in
-                    Button {
-                        withAnimation(.snappy(duration: 0.3)) { appearance.choice = choice }
-                    } label: {
-                        if appearance.choice == choice { Label(choice.label, systemImage: "checkmark") }
-                        else { Text(choice.label) }
+                Button { withAnimation(.snappy(duration: 0.3)) { appearance.select(themeID: "auto") } } label: {
+                    if appearance.isSelected(themeID: "auto") { Label("Auto", systemImage: "checkmark") } else { Text("Auto") }
+                }
+                Divider()
+                ForEach(appearance.allThemes) { t in
+                    Button { withAnimation(.snappy(duration: 0.3)) { appearance.select(themeID: t.id) } } label: {
+                        if appearance.isSelected(themeID: t.id) { Label(t.name, systemImage: "checkmark") } else { Text(t.name) }
                     }
                 }
             }
@@ -221,8 +236,15 @@ struct TopBar: View {
 
 enum WorkspaceSymbols {
     static let all: [String] = [
-        "square.grid.2x2", "house", "pencil.and.outline", "text.book.closed", "chevron.left.forwardslash.chevron.right",
-        "terminal", "globe", "sun.max", "moon", "bolt", "leaf", "flame", "briefcase", "graduationcap",
-        "paintbrush", "music.note", "camera", "heart", "star", "lightbulb", "brain", "flag"
+        "square.grid.2x2", "house", "pencil.and.outline", "text.book.closed", "chevron.left.forwardslash.chevron.right", "terminal",
+        "globe", "sun.max", "moon", "bolt", "leaf", "flame",
+        "briefcase", "graduationcap", "paintbrush", "music.note", "camera", "heart",
+        "star", "lightbulb", "brain", "flag", "bookmark", "folder",
+        "tray", "calendar", "clock", "envelope", "bubble.left", "phone",
+        "cart", "creditcard", "chart.line.uptrend.xyaxis", "chart.pie", "dollarsign.circle", "gift",
+        "gamecontroller", "film", "headphones", "mic", "photo", "paintpalette",
+        "hammer", "wrench.and.screwdriver", "cpu", "externaldrive", "network", "antenna.radiowaves.left.and.right",
+        "airplane", "car", "bicycle", "map", "mountain.2", "tent",
+        "cup.and.saucer", "fork.knife", "dumbbell", "figure.run", "pawprint", "atom"
     ]
 }

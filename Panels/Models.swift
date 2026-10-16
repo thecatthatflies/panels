@@ -94,6 +94,7 @@ struct PanelSettings: Codable, Equatable {
     var surface: SurfaceStyle = .solid
     var padding: Double = 22
     var font: EditorFont = .instrument
+    var fontFamily: String = ""
     var fontSize: Double = 15
     var lineHeight: Double = 1.5
     var measure: Double = 0
@@ -137,7 +138,7 @@ struct PanelSettings: Codable, Equatable {
     var timerSound: Bool = true
 
     enum CodingKeys: String, CodingKey {
-        case accent, surface, padding, font, fontSize, lineHeight, measure, wrap, richStyling, spellcheck, showStats, noteMode, typewriter, dimParagraphs, autoTitle, paragraphSpacing, headingScale, codeScale, termFontSize, cursor, shell, termOpacity, termFont, termLineHeight, startDirectory, startCommand, optionAsMeta, cursorBlink, scrollbackLines, zoom, mobileUA, showAddressBar, customCSS, forceDark, blockTrackers, appMode, isolatedSession, refreshMinutes, siteID, hideDone, focusMinutes, breakMinutes, longBreakMinutes, sessionsBeforeLong, timerSound
+        case accent, surface, padding, font, fontFamily, fontSize, lineHeight, measure, wrap, richStyling, spellcheck, showStats, noteMode, typewriter, dimParagraphs, autoTitle, paragraphSpacing, headingScale, codeScale, termFontSize, cursor, shell, termOpacity, termFont, termLineHeight, startDirectory, startCommand, optionAsMeta, cursorBlink, scrollbackLines, zoom, mobileUA, showAddressBar, customCSS, forceDark, blockTrackers, appMode, isolatedSession, refreshMinutes, siteID, hideDone, focusMinutes, breakMinutes, longBreakMinutes, sessionsBeforeLong, timerSound
     }
 
     init() {}
@@ -151,6 +152,7 @@ struct PanelSettings: Codable, Equatable {
         surface = v(.surface, surface)
         padding = v(.padding, padding)
         font = v(.font, font)
+        fontFamily = v(.fontFamily, fontFamily)
         fontSize = v(.fontSize, fontSize)
         lineHeight = v(.lineHeight, lineHeight)
         measure = v(.measure, measure)
@@ -480,6 +482,7 @@ final class Workspace {
     var paletteOpen = false
     var toast: String?
     var draggingID: UUID?
+    var popouts: [Popout] = []
     var focusMode = false
     var focusStart: Date?
     var focusStartWords = 0
@@ -488,6 +491,7 @@ final class Workspace {
     var webEpoch: [UUID: Int] = [:]
     var floating = false
     @ObservationIgnored var preFocusZoom: UUID?
+    @ObservationIgnored var closedSpaces: [(space: Space, index: Int)] = []
 
     @ObservationIgnored var frames: [UUID: CGRect] = [:]
     @ObservationIgnored private var toastTask: Task<Void, Never>?
@@ -496,6 +500,7 @@ final class Workspace {
         if let snap = Persistence.load(), !snap.spaces.isEmpty {
             spaces = snap.spaces
             activeSpaceID = snap.spaces.contains { $0.id == snap.active } ? snap.active : snap.spaces[0].id
+            popouts = snap.popouts ?? []
         } else {
             let s = Workspace.makeWelcomeSpace()
             spaces = [s]
@@ -579,7 +584,7 @@ final class Workspace {
         let s = space
         let panel = Panel(kind: kind, title: title, text: text, url: url, settings: settings ?? PanelSettings())
         if kind == .web && url.isEmpty { panel.url = "" }
-        withAnimation(.snappy(duration: 0.32)) {
+        withAnimation(Motion.layout) {
             if s.root.isEmpty {
                 s.root = Node(panel: panel)
             } else if let target = focused.flatMap({ s.root.leaf(for: $0.id) }) ?? s.root.leaves().last {
@@ -590,6 +595,7 @@ final class Workspace {
         focus(panel.id, grabFirstResponder: false)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { Runtime.shared.makeFirstResponder(for: panel.id) }
         Persistence.markDirty()
+        Sound.play(.open)
         return panel
     }
 
@@ -597,13 +603,14 @@ final class Workspace {
         let s = space
         guard let target = s.root.leaf(for: panelID) else { return }
         let panel = Panel(kind: kind)
-        withAnimation(.snappy(duration: 0.32)) {
+        withAnimation(Motion.layout) {
             insert(panel, beside: target, axis: axis, before: false, in: s)
             s.zoomedID = nil
         }
         focus(panel.id, grabFirstResponder: false)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { Runtime.shared.makeFirstResponder(for: panel.id) }
         Persistence.markDirty()
+        Sound.play(.split)
     }
 
     func duplicate(_ panelID: UUID) {
@@ -611,7 +618,7 @@ final class Workspace {
         guard let target = s.root.leaf(for: panelID), let src = target.panel else { return }
         let copy = Panel(kind: src.kind, title: src.title + " copy", text: src.text, url: src.url,
                          tasks: src.tasks.map { TaskItem(title: $0.title, done: $0.done) }, settings: src.settings)
-        withAnimation(.snappy(duration: 0.32)) {
+        withAnimation(Motion.layout) {
             insert(copy, beside: target, axis: autoAxis(for: target), before: false, in: s)
         }
         focus(copy.id, grabFirstResponder: false)
@@ -645,7 +652,7 @@ final class Workspace {
         guard let leaf = s.root.leaf(for: panelID) else { return }
         let order = s.panels.map { $0.id }
         let idx = order.firstIndex(of: panelID) ?? 0
-        withAnimation(.snappy(duration: 0.32)) {
+        withAnimation(Motion.layout) {
             if s.root === leaf {
                 s.root = Node.empty()
             } else if let (parent, i) = s.root.parent(of: leaf) {
@@ -656,6 +663,7 @@ final class Workspace {
             if s.zoomedID == panelID { s.zoomedID = nil }
         }
         Runtime.shared.release(panelID)
+        Sound.play(.close)
         let remaining = s.panels
         if s.focusedID == panelID {
             let nextIdx = min(max(idx - 1, 0), max(remaining.count - 1, 0))
@@ -670,7 +678,7 @@ final class Workspace {
         let s = space
         guard let srcLeaf = s.root.leaf(for: sourceID), let tgtLeaf = s.root.leaf(for: targetID),
               let src = srcLeaf.panel, let tgt = tgtLeaf.panel else { return }
-        withAnimation(.snappy(duration: 0.34)) {
+        withAnimation(Motion.layout) {
             if zone == .center {
                 srcLeaf.panel = tgt
                 tgtLeaf.panel = src
@@ -691,6 +699,7 @@ final class Workspace {
         }
         s.focusedID = sourceID
         Persistence.markDirty()
+        Sound.play(.drop)
     }
 
     func equalize() {
@@ -698,14 +707,14 @@ final class Workspace {
             n.weights = Array(repeating: 1, count: n.children.count)
             n.children.forEach(walk)
         }
-        withAnimation(.snappy(duration: 0.34)) { walk(space.root) }
+        withAnimation(Motion.layout) { walk(space.root) }
         Persistence.markDirty()
     }
 
     func toggleZoom(_ panelID: UUID? = nil) {
         let s = space
         let target = panelID ?? s.focusedID
-        withAnimation(.snappy(duration: 0.34)) {
+        withAnimation(Motion.layout) {
             if s.zoomedID != nil { s.zoomedID = nil } else { s.zoomedID = target }
         }
     }
@@ -727,7 +736,7 @@ final class Workspace {
             let extras = pool.map { Node(panel: $0) }
             root = Node(axis: .horizontal, children: [root] + extras)
         }
-        withAnimation(.snappy(duration: 0.4)) {
+        withAnimation(Motion.layout) {
             root.normalize()
             s.root = root
             s.zoomedID = nil
@@ -745,7 +754,7 @@ final class Workspace {
         let n = spaces.count + 1
         let panel = Panel(kind: .note, title: "Untitled")
         let s = Space(name: "Space \(n)", root: Node(panel: panel))
-        withAnimation(.snappy) {
+        withAnimation(Motion.swap) {
             spaces.append(s)
             activeSpaceID = s.id
         }
@@ -756,17 +765,32 @@ final class Workspace {
     func closeSpace(_ id: UUID) {
         guard spaces.count > 1, let idx = spaces.firstIndex(where: { $0.id == id }) else { return }
         let removed = spaces[idx]
-        withAnimation(.snappy) {
+        closedSpaces.append((removed, idx))
+        if closedSpaces.count > 8 { closedSpaces.removeFirst() }
+        withAnimation(Motion.swap) {
             spaces.remove(at: idx)
             if activeSpaceID == id { activeSpaceID = spaces[max(0, idx - 1)].id }
         }
         removed.panels.forEach { Runtime.shared.release($0.id) }
         Persistence.markDirty()
+        showToast("Closed \(removed.name). Cmd Shift T brings it back")
+    }
+
+    func reopenClosedSpace() {
+        guard let last = closedSpaces.popLast() else { return }
+        let idx = min(last.index, spaces.count)
+        withAnimation(Motion.swap) {
+            spaces.insert(last.space, at: idx)
+            activeSpaceID = last.space.id
+        }
+        Persistence.markDirty()
+        showToast("Reopened \(last.space.name)")
     }
 
     func selectSpace(_ id: UUID) {
         guard id != activeSpaceID else { return }
-        withAnimation(.snappy) { activeSpaceID = id }
+        Sound.play(.swap)
+        withAnimation(Motion.swap) { activeSpaceID = id }
         Persistence.markDirty()
         if let f = space.focusedID {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { Runtime.shared.makeFirstResponder(for: f) }

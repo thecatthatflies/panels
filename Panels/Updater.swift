@@ -202,6 +202,7 @@ final class Updater: NSObject, URLSessionDownloadDelegate {
                     return
                 }
                 self.state = .ready(release, app)
+                Sound.play(.update)
             }
         }
     }

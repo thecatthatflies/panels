@@ -18,6 +18,8 @@ final class TerminalController {
     private(set) var started = false
     private(set) var exited = false
     private var shellPath = ""
+    private var startDirectory = ""
+    private var startCommand = ""
 
     init(panel: Panel) {
         panelID = panel.id
@@ -62,7 +64,10 @@ final class TerminalController {
         let cArgs: [UnsafeMutablePointer<CChar>?] = [strdup(argv0), nil]
         let cEnv: [UnsafeMutablePointer<CChar>?] = env.map { strdup("\($0.key)=\($0.value)") } + [nil]
         let cPath = strdup(shell)
-        let cHome = strdup(NSHomeDirectory())
+        let requestedDir = (startDirectory.trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
+        var isDir: ObjCBool = false
+        let useDir = !requestedDir.isEmpty && FileManager.default.fileExists(atPath: requestedDir, isDirectory: &isDir) && isDir.boolValue
+        let cHome = strdup(useDir ? requestedDir : NSHomeDirectory())
 
         var size = winsize(ws_row: UInt16(emulator.rows), ws_col: UInt16(emulator.cols),
                            ws_xpixel: UInt16(max(view.bounds.width, 1)), ws_ypixel: UInt16(max(view.bounds.height, 1)))
@@ -103,6 +108,11 @@ final class TerminalController {
         }
         src.resume()
         readSource = src
+
+        let command = startCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !command.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.send(command + "\r") }
+        }
 
         let proc = DispatchSource.makeProcessSource(identifier: child, eventMask: .exit, queue: .main)
         proc.setEventHandler { [weak self] in self?.processExited() }
@@ -179,7 +189,14 @@ final class TerminalController {
 
     func apply(settings: PanelSettings, theme: Theme) {
         shellPath = settings.shell
+        startDirectory = settings.startDirectory
+        startCommand = settings.startCommand
+        emulator.maxScrollback = max(settings.scrollbackLines, 100)
+        view.optionAsMeta = settings.optionAsMeta
+        view.cursorBlink = settings.cursorBlink
         view.configure(fontSize: CGFloat(settings.termFontSize),
+                       family: settings.termFont,
+                       lineHeight: CGFloat(settings.termLineHeight),
                        cursor: settings.cursor,
                        padding: CGFloat(min(max(settings.padding, 4), 40)),
                        theme: theme,
@@ -200,6 +217,10 @@ final class TerminalNSView: NSView {
     private var cellH: CGFloat = 16
     private var fontAscent: CGFloat = 12
     private var fontSize: CGFloat = 12.5
+    private var fontFamily = ""
+    private var lineHeight: CGFloat = 1.14
+    var optionAsMeta = true
+    var cursorBlink = true
     private var pad: CGFloat = 12
     private var cursorStyle: CursorStyle = .block
     private var accent = NSColor.systemGreen
@@ -244,9 +265,12 @@ final class TerminalNSView: NSView {
 
     // MARK: configuration
 
-    func configure(fontSize size: CGFloat, cursor: CursorStyle, padding: CGFloat, theme: Theme, accent a: NSColor) {
+    func configure(fontSize size: CGFloat, family: String, lineHeight lh: CGFloat, cursor: CursorStyle, padding: CGFloat, theme: Theme, accent a: NSColor) {
         var needsLayout = false
-        if size != fontSize { fontSize = size; rebuildFonts(); needsLayout = true }
+        if size != fontSize || family != fontFamily || abs(lh - lineHeight) > 0.001 {
+            fontSize = size; fontFamily = family; lineHeight = lh
+            rebuildFonts(); needsLayout = true
+        }
         if padding != pad { pad = padding; needsLayout = true }
         cursorStyle = cursor
         accent = a
@@ -272,15 +296,20 @@ final class TerminalNSView: NSView {
     }
 
     private func rebuildFonts() {
-        fontRegular = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        fontBold = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .semibold)
         let fm = NSFontManager.shared
+        if !fontFamily.isEmpty, let f = fm.font(withFamily: fontFamily, traits: [], weight: 5, size: fontSize) {
+            fontRegular = f
+            fontBold = fm.font(withFamily: fontFamily, traits: .boldFontMask, weight: 9, size: fontSize) ?? fm.convert(f, toHaveTrait: .boldFontMask)
+        } else {
+            fontRegular = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+            fontBold = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .semibold)
+        }
         fontItalic = fm.convert(fontRegular, toHaveTrait: .italicFontMask)
         fontBoldItalic = fm.convert(fontBold, toHaveTrait: .italicFontMask)
         let adv = ("M" as NSString).size(withAttributes: [.font: fontRegular]).width
         cellW = adv
         let natural = fontRegular.ascender - fontRegular.descender + fontRegular.leading
-        cellH = ceil(natural * 1.14)
+        cellH = ceil(natural * lineHeight)
         fontAscent = fontRegular.ascender + (cellH - natural) / 2
     }
 
@@ -341,7 +370,7 @@ final class TerminalNSView: NSView {
 
     private func startBlink() {
         blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.55, repeats: true) { [weak self] _ in
-            guard let self, self.window?.firstResponder === self, self.window?.isKeyWindow == true else { return }
+            guard let self, self.cursorBlink, self.window?.firstResponder === self, self.window?.isKeyWindow == true else { return }
             self.cursorPhase.toggle()
             self.setNeedsDisplay(self.cursorRect().insetBy(dx: -2, dy: -2))
         }
@@ -498,7 +527,7 @@ final class TerminalNSView: NSView {
             path.stroke()
             return
         }
-        guard cursorPhase else { return }
+        guard cursorPhase || !cursorBlink else { return }
 
         switch cursorStyle {
         case .block:
@@ -535,6 +564,7 @@ final class TerminalNSView: NSView {
     override func keyDown(with event: NSEvent) {
         guard let controller else { return }
         if controller.exited { controller.restart(); return }
+        if let kind = SoundClassify.kind(for: event) { Sound.type(kind) }
         if scrollOffset != 0 { scrollOffset = 0; needsDisplay = true }
         selAnchor = nil
         selHead = nil
@@ -596,7 +626,7 @@ final class TerminalNSView: NSView {
             controller.send("\u{0}")
             return
         }
-        if opt, !ctrl, let base = event.charactersIgnoringModifiers, base.unicodeScalars.count == 1,
+        if opt, !ctrl, optionAsMeta, let base = event.charactersIgnoringModifiers, base.unicodeScalars.count == 1,
            let u = base.unicodeScalars.first, u.isASCII {
             controller.send("\u{1B}" + base)
             return

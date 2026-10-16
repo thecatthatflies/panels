@@ -32,6 +32,16 @@ struct RootView: View {
                 .zIndex(5)
             }
 
+            if DictationController.shared.isActive {
+                VStack {
+                    Spacer()
+                    DictationHUD()
+                        .padding(.bottom, locked ? 74 : 26)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .zIndex(6)
+            }
+
             if ws.paletteOpen {
                 CommandPalette()
                     .zIndex(10)
@@ -62,6 +72,7 @@ struct RootView: View {
         .frame(minWidth: 760, minHeight: 500)
         .animation(.smooth(duration: 0.5), value: locked)
         .animation(.snappy(duration: 0.22), value: ws.paletteOpen)
+        .animation(Motion.layout, value: DictationController.shared.isActive)
         .animation(.spring(response: 0.38, dampingFraction: 0.82), value: ws.toast)
         .animation(.smooth(duration: 0.4), value: theme.id)
         .onChange(of: theme.isDark) { _, dark in
@@ -79,8 +90,11 @@ struct WindowBackground: View {
 
     var body: some View {
         ZStack {
-            VisualEffectView(material: .underWindowBackground, blending: .behindWindow)
-            theme.windowC.opacity(translucency)
+            // Respects System Settings > Accessibility > Display > Reduce transparency.
+            if !NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency {
+                VisualEffectView(material: .underWindowBackground, blending: .behindWindow)
+            }
+            theme.windowC.opacity(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency ? 1 : translucency)
         }
         .ignoresSafeArea()
     }
@@ -109,6 +123,5 @@ struct SpaceContent: View {
         .padding(.horizontal, side)
         .padding(.bottom, locked ? max(gap * 3, 28) + 36 : gap + 2)
         .id(s.id)
-        .transition(.opacity)
     }
 }

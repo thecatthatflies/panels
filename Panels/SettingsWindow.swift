@@ -46,7 +46,11 @@ struct SettingsView: View {
             Group {
                 switch r.tab {
                 case .general: GeneralSettings()
+                case .themes: ThemesSettings()
                 case .writing: WritingSettings()
+                case .about: AboutSettingsView()
+                case .dictation: DictationSettingsView()
+                case .sound: SoundSettingsView()
                 case .sites: SitesSettings()
                 case .updates: ScrollView { UpdateSettingsSection().padding(26) }
                 case .shortcuts: ShortcutsSettings()
@@ -79,33 +83,31 @@ struct GeneralSettings: View {
                     .foregroundStyle(theme.textC)
 
                 SettingsSection(title: "Theme") {
-                    SegmentedChips(options: ThemeChoice.allCases, selection: $a.choice, label: { $0.label })
-                    HStack(spacing: 10) {
-                        ForEach(Theme.all) { t in
-                            VStack(spacing: 6) {
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(t.surfaceC)
-                                    .frame(height: 52)
-                                    .overlay(alignment: .bottomLeading) {
-                                        HStack(spacing: 4) {
-                                            Circle().fill(t.accentC).frame(width: 9, height: 9)
-                                            Capsule().fill(t.textC.opacity(0.55)).frame(width: 26, height: 3)
-                                            Capsule().fill(t.textC.opacity(0.25)).frame(width: 14, height: 3)
-                                        }
-                                        .padding(9)
-                                    }
-                                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .strokeBorder(appearance.theme.id == t.id ? theme.accentC : t.hairlineStrong,
-                                                      lineWidth: appearance.theme.id == t.id ? 2 : 1))
-                                Text(t.name).font(Typo.ui(11.5)).foregroundStyle(theme.mutedC)
+                    FlowLayout(spacing: 8) {
+                        ForEach(["auto"] + appearance.allThemes.map(\.id), id: \.self) { id in
+                            let name = id == "auto" ? "Auto" : (appearance.allThemes.first { $0.id == id }?.name ?? id)
+                            let on = appearance.isSelected(themeID: id)
+                            Button { withAnimation(.snappy(duration: 0.3)) { appearance.select(themeID: id) } } label: {
+                                Text(name)
+                                    .font(Typo.ui(12, bold: on))
+                                    .foregroundStyle(on ? theme.textC : theme.mutedC)
+                                    .padding(.horizontal, 12).padding(.vertical, 6)
+                                    .background(Capsule().fill(on ? theme.accentC.opacity(0.18) : theme.hover))
+                                    .overlay(Capsule().strokeBorder(on ? theme.accentC.opacity(0.6) : .clear, lineWidth: 1))
+                                    .contentShape(Capsule())
                             }
-                            .onTapGesture {
-                                withAnimation(.snappy(duration: 0.3)) {
-                                    a.choice = ThemeChoice(rawValue: t.id) ?? .auto
-                                }
-                            }
+                            .buttonStyle(PressStyle())
                         }
                     }
+                    Button { SettingsRouter.shared.show(.themes) } label: { Label("Edit Themes...", systemImage: "paintpalette") }
+                }
+
+                SettingsSection(title: "Density") {
+                    SegmentedChips(options: Appearance.Density.allCases,
+                                   selection: Binding(get: { appearance.density }, set: { d in withAnimation(Motion.layout) { appearance.apply(density: d) } }),
+                                   label: { $0.label })
+                    Text("Sets the gap between panels, corner radius and header height in one go. Fine tune them below.")
+                        .font(Typo.ui(11.5)).foregroundStyle(theme.faintC)
                 }
 
                 SettingsSection(title: "Window") {
@@ -234,7 +236,7 @@ struct ShortcutsSettings: View {
         ]),
         ("Writing", [
             ("Lock in", "Cmd Shift L"), ("Bold", "Cmd B"), ("Italic", "Cmd I"), ("Inline code", "Cmd E"),
-            ("Link", "Cmd Shift K"), ("Open wiki link", "Cmd click"), ("Find", "Cmd F"), ("Find and replace", "Cmd Option F"),
+            ("Dictate", "Cmd Shift M"), ("Link", "Cmd Shift K"), ("Open wiki link", "Cmd click"), ("Find", "Cmd F"), ("Find and replace", "Cmd Option F"),
             ("Find next or previous", "Cmd G and Cmd Shift G"), ("Bigger, smaller, actual size", "Cmd + and Cmd - and Cmd 0"), ("Save as markdown", "Cmd S")
         ]),
         ("Web", [

@@ -15,8 +15,14 @@ struct PanelsApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
-        .defaultSize(width: 1380, height: 880)
         .commands { PanelsCommands() }
+
+        Window("About Panels", id: "about") {
+            AboutView()
+                .environment(\.theme, Appearance.shared.theme)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
 
         Settings {
             SettingsView()
@@ -35,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Persistence.startAutosave()
         Updater.shared.start()
+        DispatchQueue.main.async { PopoutManager.shared.restoreAll() }
         Appearance.shared.refreshSystem()
         appearanceObserver = NSApp.observe(\.effectiveAppearance, options: [.new]) { _, _ in
             DispatchQueue.main.async { Appearance.shared.refreshSystem() }

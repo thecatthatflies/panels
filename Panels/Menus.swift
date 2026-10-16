@@ -7,12 +7,20 @@ struct PanelsCommands: Commands {
     private let sites = SiteLibrary.shared
     private let templates = TemplateStore.shared
 
+    @Environment(\.openWindow) private var openWindow
     private var focusedKind: PanelKind? { ws.focused?.kind }
 
     var body: some Commands {
         // MARK: app menu
-        CommandGroup(after: .appInfo) {
+        CommandGroup(replacing: .appInfo) {
+            Button("About Panels") { openWindow(id: "about") }
             Button("Check for Updates...") { Updater.shared.check(userInitiated: true) }
+        }
+
+        CommandGroup(after: .help) {
+            Divider()
+            Button("Support Panels...") { AboutLinks.open(AboutLinks.support) }
+            Button("Visit aiyan.tech") { AboutLinks.open(AboutLinks.portfolio) }
         }
 
         // MARK: File
@@ -51,8 +59,13 @@ struct PanelsCommands: Commands {
             }
             .disabled(focusedKind != .note)
             Divider()
-            Button("Close Panel") { if let f = ws.focused { ws.close(f.id) } }
-                .keyboardShortcut("w", modifiers: .command)
+            Button("Close Panel") {
+                let key = NSApp.keyWindow
+                if let pw = key as? PopoutWindow { ws.closePopout(pw.panelID) }
+                else if let key, key !== WindowChrome.mainWindow { key.performClose(nil) }   // Settings and other windows
+                else if let f = ws.focused { ws.close(f.id) }
+            }
+            .keyboardShortcut("w", modifiers: .command)
             Button("Close Workspace") { ws.closeSpace(ws.activeSpaceID) }
                 .keyboardShortcut("w", modifiers: [.command, .shift])
                 .disabled(ws.spaces.count < 2)
@@ -108,12 +121,13 @@ struct PanelsCommands: Commands {
                 }
             }
             Menu("Theme") {
-                ForEach(ThemeChoice.allCases) { choice in
-                    Button {
-                        withAnimation(.snappy(duration: 0.3)) { appearance.choice = choice }
-                    } label: {
-                        if appearance.choice == choice { Label(choice.label, systemImage: "checkmark") }
-                        else { Text(choice.label) }
+                Button { withAnimation(.snappy(duration: 0.3)) { appearance.select(themeID: "auto") } } label: {
+                    if appearance.isSelected(themeID: "auto") { Label("Auto", systemImage: "checkmark") } else { Text("Auto") }
+                }
+                Divider()
+                ForEach(appearance.allThemes) { t in
+                    Button { withAnimation(.snappy(duration: 0.3)) { appearance.select(themeID: t.id) } } label: {
+                        if appearance.isSelected(themeID: t.id) { Label(t.name, systemImage: "checkmark") } else { Text(t.name) }
                     }
                 }
             }
@@ -131,6 +145,17 @@ struct PanelsCommands: Commands {
                 .keyboardShortcut("d", modifiers: .command)
             Button("Split Down") { if let f = ws.focused { ws.split(f.id, axis: .vertical, kind: .note) } }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
+            Button(DictationController.shared.isActive ? "Stop Dictation" : "Dictate") {
+                DictationController.shared.toggle(for: ws.focused)
+            }
+            .keyboardShortcut("m", modifiers: [.command, .shift])
+            Button("Pop Out into Window") { if let f = ws.focused { ws.popOut(f.id) } }
+                .keyboardShortcut("o", modifiers: [.command, .option])
+            Button("Return Window to App") { if let pw = NSApp.keyWindow as? PopoutWindow { ws.dock(pw.panelID) } }
+                .disabled(!(NSApp.keyWindow is PopoutWindow))
+            Button("Return All Windows to App") { ws.dockAll() }
+                .disabled(ws.popouts.isEmpty)
+            Divider()
             Button("Duplicate Panel") { if let f = ws.focused { ws.duplicate(f.id) } }
                 .keyboardShortcut("d", modifiers: [.command, .option])
             Button("Rename Panel") { ws.renameRequest = ws.focused?.id }
@@ -193,6 +218,9 @@ struct PanelsCommands: Commands {
                     Button { ws.newSpace(from: t) } label: { Label(t.name, systemImage: t.symbol) }
                 }
             }
+            Button("Reopen Closed Workspace") { ws.reopenClosedSpace() }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .disabled(ws.closedSpaces.isEmpty)
             Button("Duplicate Workspace") { ws.duplicateSpace(ws.activeSpaceID) }
             Button("Rename Workspace...") {
                 if let name = Prompt.text(title: "Rename Workspace", message: "Choose a new name.",
@@ -220,7 +248,7 @@ struct PanelsCommands: Commands {
                     if ws.space.themeID == nil { Label("Follow App", systemImage: "checkmark") } else { Text("Follow App") }
                 }
                 Divider()
-                ForEach(Theme.all) { t in
+                ForEach(appearance.allThemes) { t in
                     Button { ws.space.themeID = t.id } label: {
                         if ws.space.themeID == t.id { Label(t.name, systemImage: "checkmark") } else { Text(t.name) }
                     }

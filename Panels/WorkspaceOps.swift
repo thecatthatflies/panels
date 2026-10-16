@@ -159,6 +159,8 @@ extension Workspace {
         }
         WindowChrome.refresh(animated: true)
         WindowChrome.setTrafficLights(hidden: true)
+        Sound.play(.lockIn)
+        Sound.lockIn(true)
         Runtime.shared.makeFirstResponder(for: f.id)
     }
 
@@ -170,6 +172,8 @@ extension Workspace {
         }
         WindowChrome.refresh(animated: true)
         WindowChrome.setTrafficLights(hidden: false)
+        Sound.play(.lockOut)
+        Sound.lockIn(false)
         preFocusZoom = nil
         if let f = space.focusedID {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { Runtime.shared.makeFirstResponder(for: f) }
@@ -187,7 +191,7 @@ extension Workspace {
         guard let src = spaces.first(where: { $0.id == id }) else { return }
         let copy = Space(name: src.name + " copy", root: src.root.deepCopy(), symbol: src.symbol, tint: src.tint, themeID: src.themeID)
         guard let idx = spaces.firstIndex(where: { $0.id == id }) else { return }
-        withAnimation(.snappy) {
+        withAnimation(Motion.swap) {
             spaces.insert(copy, at: idx + 1)
             activeSpaceID = copy.id
         }
@@ -199,7 +203,7 @@ extension Workspace {
         guard let i = spaces.firstIndex(where: { $0.id == id }) else { return }
         let j = i + delta
         guard j >= 0, j < spaces.count else { return }
-        withAnimation(.snappy) { spaces.swapAt(i, j) }
+        withAnimation(Motion.layout) { spaces.swapAt(i, j) }
         Persistence.markDirty()
     }
 
@@ -211,7 +215,7 @@ extension Workspace {
     func newSpace(from template: LayoutTemplate) {
         let root = template.root.build()
         let s = Space(name: template.name, root: root, symbol: template.symbol)
-        withAnimation(.snappy) {
+        withAnimation(Motion.swap) {
             spaces.append(s)
             activeSpaceID = s.id
         }
@@ -234,7 +238,7 @@ extension Workspace {
               let target = spaces.first(where: { $0.id == targetID }),
               let leaf = space.root.leaf(for: panelID), let panel = leaf.panel else { return }
         let source = space
-        withAnimation(.snappy(duration: 0.34)) {
+        withAnimation(Motion.layout) {
             if source.root === leaf {
                 source.root = Node.empty()
             } else if let (parent, i) = source.root.parent(of: leaf) {

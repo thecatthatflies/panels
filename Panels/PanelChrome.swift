@@ -40,15 +40,13 @@ struct PanelView: View {
             shape.strokeBorder(locked ? Color.clear : (isFocused ? accent.opacity(0.65) : theme.hairline), lineWidth: 1)
         }
         .overlay { dragLayer(shape) }
-        .shadow(color: locked ? .clear : theme.shadow.opacity(isFocused ? 0.9 : 0.5),
-                radius: isFocused ? 14 : 8, y: isFocused ? 6 : 3)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ws.frames[panel.id] = $0 }
         .onHover { hovering = $0 }
-        .animation(.snappy(duration: 0.22), value: isFocused)
-        .scaleEffect(appeared ? 1 : 0.965)
+        .animation(Motion.quick, value: isFocused)
+        .scaleEffect(appeared ? 1 : 0.985)
         .opacity(appeared ? 1 : 0)
         .onAppear {
-            withAnimation(.spring(response: 0.46, dampingFraction: 0.84).delay(Double(order) * 0.05)) { appeared = true }
+            withAnimation(Motion.appear) { appeared = true }
         }
         .onChange(of: ws.settingsRequest) { _, id in
             if id == panel.id { showSettings = true; ws.settingsRequest = nil }
@@ -69,7 +67,9 @@ struct PanelView: View {
     private func surfaceBackground(_ shape: RoundedRectangle) -> some View {
         switch panel.settings.surface {
         case .solid:
-            shape.fill(surfaceColor)
+            shape.fill(surfaceColor.opacity(panel.kind == .terminal ? panel.settings.termOpacity : 1))
+                .shadow(color: locked ? .clear : theme.shadow.opacity(isFocused ? 0.8 : 0.45),
+                        radius: isFocused ? 12 : 7, y: isFocused ? 5 : 3)
         case .glass:
             ZStack {
                 VisualEffectView(material: theme.isDark ? .hudWindow : .popover, blending: .behindWindow)
@@ -150,6 +150,12 @@ struct PanelView: View {
             }
 
             HStack(spacing: 1) {
+                if panel.kind == .note || panel.kind == .terminal {
+                    IconButton(symbol: DictationController.shared.isListening(for: panel.id) ? "mic.fill" : "mic",
+                               help: "Dictate (Cmd Shift M)", active: DictationController.shared.isListening(for: panel.id), tint: accent) {
+                        DictationController.shared.toggle(for: panel)
+                    }
+                }
                 IconMenu(symbol: "rectangle.split.2x1", help: "Split right (Cmd D)") {
                     splitMenu(axis: .horizontal)
                 }
@@ -169,24 +175,26 @@ struct PanelView: View {
                            help: "Zoom panel (Cmd Shift Return)") {
                     ws.toggleZoom(panel.id)
                 }
+                IconButton(symbol: "arrow.up.forward.square", help: "Pop out into its own window") {
+                    ws.popOut(panel.id)
+                }
                 IconButton(symbol: "xmark", help: "Close panel (Cmd W)") {
                     ws.close(panel.id)
                 }
             }
             .opacity(showActions ? 1 : 0)
-            .offset(x: showActions ? 0 : 8)
-            .blur(radius: showActions ? 0 : 2)
-            .animation(.snappy(duration: 0.22), value: showActions)
+            .offset(x: showActions ? 0 : 6)
+            .animation(Motion.quick, value: showActions)
         }
         .padding(.horizontal, 12)
-        .frame(height: locked ? 30 : 38)
+        .frame(height: locked ? 30 : CGFloat(appearance.headerHeight))
         .opacity(locked ? 0.55 : 1)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
+        .onTapGesture { ws.focus(panel.id) }
+        .simultaneousGesture(TapGesture(count: 2).onEnded {
             renaming = true
             DispatchQueue.main.async { titleFocused = true }
-        }
-        .onTapGesture { ws.focus(panel.id) }
+        })
         .onDrag {
             PanelDrag.begin(panel.id)
             return NSItemProvider(object: panel.id.uuidString as NSString)
@@ -204,6 +212,7 @@ struct PanelView: View {
             Button("Rename") { renaming = true; DispatchQueue.main.async { titleFocused = true } }
             Button("Duplicate") { ws.duplicate(panel.id) }
             Button(isZoomed ? "Restore" : "Zoom") { ws.toggleZoom(panel.id) }
+            Button("Pop Out into Window") { ws.popOut(panel.id) }
             if ws.spaces.count > 1 {
                 Menu("Move to Workspace") {
                     ForEach(ws.spaces.filter { $0.id != ws.activeSpaceID }) { sp in
@@ -230,8 +239,14 @@ struct PanelView: View {
 
     // MARK: content
 
-    @ViewBuilder
-    private var content: some View {
+    private var content: some View { PanelBodyView(panel: panel) }
+}
+
+/// The inside of a panel, shared by the main window and pop-out windows.
+struct PanelBodyView: View {
+    @Bindable var panel: Panel
+
+    var body: some View {
         switch panel.kind {
         case .note: NotePanelView(panel: panel)
         case .terminal: TerminalPanelView(panel: panel)
@@ -339,8 +354,9 @@ struct PanelSettingsView: View {
     @ViewBuilder
     private var noteSettings: some View {
         SettingsSection(title: "Typography") {
-            SettingRow(label: "Typeface") {
-                Picker("", selection: $panel.settings.font) {
+            SettingRow(label: "Typeface", value: panel.settings.fontFamily.isEmpty ? nil : panel.settings.fontFamily) {
+                Picker("", selection: Binding(get: { panel.settings.font },
+                                              set: { panel.settings.font = $0; panel.settings.fontFamily = "" })) {
                     ForEach(EditorFont.allCases) { f in Text(f.label).tag(f) }
                 }
                 .labelsHidden()
@@ -350,6 +366,12 @@ struct PanelSettingsView: View {
                       format: { String(format: "%.1f", $0) }, tint: accent)
             SliderRow(label: "Line height", value: $panel.settings.lineHeight, range: 1.1...2.2, step: 0.05,
                       format: { String(format: "%.2f", $0) }, tint: accent)
+            SliderRow(label: "Paragraph spacing", value: $panel.settings.paragraphSpacing, range: 0...1, step: 0.05,
+                      format: { String(format: "%.2f", $0) }, tint: accent)
+            SliderRow(label: "Heading size", value: $panel.settings.headingScale, range: 0...1.6, step: 0.05,
+                      format: { String(format: "%.0f%%", $0 * 100) }, tint: accent)
+            SliderRow(label: "Code size", value: $panel.settings.codeScale, range: 0.7...1.1, step: 0.02,
+                      format: { String(format: "%.0f%%", $0 * 100) }, tint: accent)
             SettingRow(label: "Text width", value: panel.settings.measure == 0 ? "Full" : "\(Int(panel.settings.measure)) pt") {
                 Slider(value: $panel.settings.measure, in: 0...1000, step: 20)
                     .controlSize(.small)
@@ -371,29 +393,61 @@ struct PanelSettingsView: View {
         }
     }
 
+    private static let monoFamilies: [String] = {
+        let fm = NSFontManager.shared
+        var set = Set<String>()
+        for name in fm.availableFontNames(with: .fixedPitchFontMask) ?? [] {
+            if let fam = NSFont(name: name, size: 12)?.familyName, !fam.hasPrefix(".") { set.insert(fam) }
+        }
+        return set.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }()
+
     @ViewBuilder
     private var terminalSettings: some View {
         SettingsSection(title: "Terminal") {
+            SettingRow(label: "Font", value: panel.settings.termFont.isEmpty ? "SF Mono" : nil) {
+                Picker("", selection: $panel.settings.termFont) {
+                    Text("SF Mono").tag("")
+                    ForEach(Self.monoFamilies, id: \.self) { Text($0).tag($0) }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+            }
             SliderRow(label: "Font size", value: $panel.settings.termFontSize, range: 9...24, step: 0.5,
                       format: { String(format: "%.1f", $0) }, tint: accent)
+            SliderRow(label: "Line height", value: $panel.settings.termLineHeight, range: 1.0...1.6, step: 0.02,
+                      format: { String(format: "%.2f", $0) }, tint: accent)
             SettingRow(label: "Cursor") {
                 SegmentedChips(options: CursorStyle.allCases, selection: $panel.settings.cursor,
                                label: { $0.label }, tint: accent)
             }
+            ToggleRow(label: "Blinking cursor", isOn: $panel.settings.cursorBlink, tint: accent)
+            ToggleRow(label: "Option key acts as Meta", isOn: $panel.settings.optionAsMeta, tint: accent)
             SliderRow(label: "Background opacity", value: $panel.settings.termOpacity, range: 0.3...1, step: 0.05,
                       format: { String(format: "%.0f%%", $0 * 100) }, tint: accent)
-            SettingRow(label: "Shell", value: panel.settings.shell.isEmpty ? "Default" : nil) {
-                TextField("/bin/zsh", text: $panel.settings.shell)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(theme.textC)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(theme.hover))
-            }
-            Text("Shell changes apply to the next session. Close and reopen the panel to restart.")
+            SliderRow(label: "Scrollback", value: Binding(get: { Double(panel.settings.scrollbackLines) },
+                                                          set: { panel.settings.scrollbackLines = Int($0) }),
+                      range: 500...50000, step: 500, format: { "\(Int($0)) lines" }, tint: accent)
+        }
+        SettingsSection(title: "Startup") {
+            textField("Shell", $panel.settings.shell, placeholder: "/bin/zsh")
+            textField("Start in folder", $panel.settings.startDirectory, placeholder: "~/Projects")
+            textField("Run on start", $panel.settings.startCommand, placeholder: "npm run dev")
+            Text("Startup options apply to the next session. Close and reopen the panel to restart.")
                 .font(Typo.ui(11))
                 .foregroundStyle(theme.faintC)
+        }
+    }
+
+    private func textField(_ label: String, _ text: Binding<String>, placeholder: String) -> some View {
+        SettingRow(label: label) {
+            TextField(placeholder, text: text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(theme.textC)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(theme.hover))
         }
     }
 
@@ -428,6 +482,7 @@ struct PanelSettingsView: View {
     @ViewBuilder
     private var tasksSettings: some View {
         SettingsSection(title: "Tasks") {
+            ToggleRow(label: "Hide completed tasks", isOn: $panel.settings.hideDone, tint: accent)
             actionChip("Clear completed", symbol: "checkmark.circle") {
                 panel.tasks.removeAll { $0.done }
             }
@@ -443,6 +498,13 @@ struct PanelSettingsView: View {
             SliderRow(label: "Break", value: Binding(get: { Double(panel.settings.breakMinutes) },
                                                      set: { panel.settings.breakMinutes = Int($0) }),
                       range: 1...30, step: 1, format: { "\(Int($0)) min" }, tint: accent)
+            SliderRow(label: "Long break", value: Binding(get: { Double(panel.settings.longBreakMinutes) },
+                                                          set: { panel.settings.longBreakMinutes = Int($0) }),
+                      range: 5...60, step: 5, format: { "\(Int($0)) min" }, tint: accent)
+            SliderRow(label: "Sessions before long break", value: Binding(get: { Double(panel.settings.sessionsBeforeLong) },
+                                                                          set: { panel.settings.sessionsBeforeLong = Int($0) }),
+                      range: 2...8, step: 1, format: { "\(Int($0))" }, tint: accent)
+            ToggleRow(label: "Play a sound when a session ends", isOn: $panel.settings.timerSound, tint: accent)
         }
     }
 

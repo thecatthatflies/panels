@@ -117,13 +117,17 @@ extension Workspace {
 final class SettingsRouter {
     static let shared = SettingsRouter()
     enum Tab: String, CaseIterable, Identifiable {
-        case general, writing, sites, updates, shortcuts
+        case general, themes, writing, dictation, sound, sites, updates, shortcuts, about
         var id: String { rawValue }
         var label: String { rawValue.capitalized }
         var symbol: String {
             switch self {
             case .general: return "slider.horizontal.3"
+            case .themes: return "paintpalette"
             case .writing: return "pencil.and.outline"
+            case .about: return "info.circle"
+            case .dictation: return "mic"
+            case .sound: return "speaker.wave.2"
             case .sites: return "globe"
             case .updates: return "arrow.triangle.2.circlepath"
             case .shortcuts: return "command"

@@ -162,7 +162,7 @@ struct SplitContainer: View {
         let avg = (w[i] + w[i + 1]) / 2
         w[i] = avg
         w[i + 1] = avg
-        withAnimation(.snappy(duration: 0.3)) { node.weights = w }
+        withAnimation(Motion.layout) { node.weights = w }
         Persistence.markDirty()
     }
 }

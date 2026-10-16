@@ -63,6 +63,13 @@ struct CommandPalette: View {
                                    symbol: "arrow.up.left.and.arrow.down.right", keywords: "maximize fullscreen focus", shortcut: "Cmd Shift Return") {
                 ws.toggleZoom(f.id)
             })
+            if f.kind == .note || f.kind == .terminal {
+                out.append(PaletteItem(id: "dictate", title: DictationController.shared.isActive ? "Stop Dictation" : "Dictate",
+                                       subtitle: "Speak into \(f.title)", symbol: "mic", keywords: "voice speech talk transcribe",
+                                       shortcut: "Cmd Shift M") { DictationController.shared.toggle(for: f) })
+            }
+            out.append(PaletteItem(id: "popout", title: "Pop Out into Window", subtitle: "Float \(f.title) above everything",
+                                   symbol: "arrow.up.forward.square", keywords: "detach pin float separate window", shortcut: "Cmd Option O") { ws.popOut(f.id) })
             out.append(PaletteItem(id: "duplicate", title: "Duplicate Panel", subtitle: f.title,
                                    symbol: "plus.square.on.square", keywords: "copy clone", shortcut: nil) { ws.duplicate(f.id) })
             out.append(PaletteItem(id: "close", title: "Close Panel", subtitle: f.title,
@@ -98,6 +105,10 @@ struct CommandPalette: View {
                 })
             }
         }
+        for po in ws.popouts {
+            out.append(PaletteItem(id: "dock-\(po.panel.id)", title: "Return to App: \(po.panel.title)", subtitle: "Pop-out window",
+                                   symbol: "arrow.uturn.backward.square", keywords: "dock window popout", shortcut: nil) { ws.dock(po.panel.id) })
+        }
         out.append(PaletteItem(id: "equalize", title: "Even Out Sizes", subtitle: "Give every panel equal room",
                                symbol: "equal.square", keywords: "balance resize reset", shortcut: "Cmd Option =") { ws.equalize() })
         for preset in LayoutPreset.allCases {
@@ -120,6 +131,10 @@ struct CommandPalette: View {
         })
         out.append(PaletteItem(id: "open-file", title: "Open Markdown File...", subtitle: "Open a file as a note",
                                symbol: "doc.text", keywords: "import md", shortcut: "Cmd O") { FileOps.openMarkdown() })
+        out.append(PaletteItem(id: "support", title: "Support Panels", subtitle: "Say thanks with a donation",
+                               symbol: "heart", keywords: "donate tip sponsor stripe", shortcut: nil) { AboutLinks.open(AboutLinks.support) })
+        out.append(PaletteItem(id: "portfolio", title: "Visit aiyan.tech", subtitle: "The maker's portfolio",
+                               symbol: "globe", keywords: "portfolio website about maker", shortcut: nil) { AboutLinks.open(AboutLinks.portfolio) })
         out.append(PaletteItem(id: "settings", title: "Settings", subtitle: "Appearance, sites, updates",
                                symbol: "gearshape", keywords: "preferences options", shortcut: "Cmd ,") { SettingsRouter.shared.show(.general) })
         for (i, s) in ws.spaces.enumerated() where s.id != ws.activeSpaceID {
@@ -128,10 +143,10 @@ struct CommandPalette: View {
                 ws.selectSpace(s.id)
             })
         }
-        for choice in ThemeChoice.allCases {
-            out.append(PaletteItem(id: "theme-\(choice.rawValue)", title: "Theme: \(choice.label)", subtitle: "Change the look of the whole app",
+        for entry in [("auto", "Auto")] + appearance.allThemes.map({ ($0.id, $0.name) }) {
+            out.append(PaletteItem(id: "theme-\(entry.0)", title: "Theme: \(entry.1)", subtitle: "Change the look of the whole app",
                                    symbol: "circle.lefthalf.filled", keywords: "appearance color dark light", shortcut: nil) {
-                withAnimation(.snappy(duration: 0.3)) { appearance.choice = choice }
+                withAnimation(.snappy(duration: 0.3)) { appearance.select(themeID: entry.0) }
             })
         }
         return out

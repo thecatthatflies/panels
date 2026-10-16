@@ -190,10 +190,10 @@ struct MarkdownPreview: View {
     private func font(_ size: CGFloat, bold: Bool, italic: Bool) -> Font {
         let f: NSFont
         switch (bold, italic) {
-        case (true, true): f = settings.font.boldItalic(size)
-        case (true, false): f = settings.font.bold(size)
-        case (false, true): f = settings.font.italic(size)
-        default: f = settings.font.regular(size)
+        case (true, true): f = settings.face.boldItalic(size)
+        case (true, false): f = settings.face.bold(size)
+        case (false, true): f = settings.face.italic(size)
+        default: f = settings.face.regular(size)
         }
         return Font(f as CTFont)
     }
@@ -412,6 +412,7 @@ struct NotePanelView: View {
     @Bindable var panel: Panel
     @Environment(\.theme) private var theme
     private let ws = Workspace.shared
+    @State private var showFonts = false
 
     private var accent: Color { theme.accent(panel.settings.accent) }
 
@@ -466,7 +467,7 @@ struct NotePanelView: View {
             .overlay(alignment: .topLeading) {
                 if panel.text.isEmpty {
                     Text("Start writing. Markdown works as you type.")
-                        .font(Font(eff.font.regular(CGFloat(eff.fontSize)) as CTFont))
+                        .font(Font(eff.face.regular(CGFloat(eff.fontSize)) as CTFont))
                         .foregroundStyle(theme.faintC)
                         .padding(CGFloat(eff.padding))
                         .padding(.leading, eff.measure > 0 ? 0 : 0)
@@ -490,7 +491,21 @@ struct NotePanelView: View {
             Text("\(s.chars) characters")
             if s.minutes > 0 { Text("\(s.minutes) min read") }
             Spacer()
-            Text(panel.settings.font.label)
+            Button { showFonts.toggle() } label: {
+                HStack(spacing: 4) {
+                    Text(panel.settings.face.label)
+                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold))
+                }
+                .foregroundStyle(showFonts ? accent : theme.faintC)
+                .padding(.horizontal, 6).padding(.vertical, 3)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(showFonts ? accent.opacity(0.14) : .clear))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Change the font")
+            .popover(isPresented: $showFonts, arrowEdge: .top) {
+                FontPicker(panel: panel).environment(\.theme, theme)
+            }
         }
         .font(Typo.ui(11))
         .foregroundStyle(theme.faintC)
@@ -508,5 +523,108 @@ struct NotePanelView: View {
             lines[line] = l.replacingCharacters(in: r, with: "[ ]")
         }
         panel.text = lines.joined(separator: "\n")
+    }
+}
+
+
+// MARK: - Font picker (every font installed on this Mac)
+
+struct FontPicker: View {
+    @Bindable var panel: Panel
+    @Environment(\.theme) private var theme
+    @State private var query = ""
+    @FocusState private var searchFocused: Bool
+
+    private static let families: [String] = NSFontManager.shared.availableFontFamilies
+        .filter { !$0.hasPrefix(".") }
+        .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+
+    private var filtered: [String] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        return q.isEmpty ? Self.families : Self.families.filter { $0.localizedCaseInsensitiveContains(q) }
+    }
+
+    private var accent: Color { theme.accent(panel.settings.accent) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .medium)).foregroundStyle(theme.faintC)
+                TextField("Search \(Self.families.count) fonts", text: $query)
+                    .textFieldStyle(.plain)
+                    .font(Typo.ui(13))
+                    .foregroundStyle(theme.textC)
+                    .focused($searchFocused)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 38)
+
+            Rectangle().fill(theme.hairline).frame(height: 1)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    if query.isEmpty {
+                        header("Presets")
+                        ForEach(EditorFont.allCases) { preset in
+                            row(title: preset.label, font: Font(preset.regular(14) as CTFont),
+                                selected: panel.settings.fontFamily.isEmpty && panel.settings.font == preset) {
+                                panel.settings.fontFamily = ""
+                                panel.settings.font = preset
+                            }
+                        }
+                        header("Installed fonts")
+                    }
+                    ForEach(filtered, id: \.self) { family in
+                        row(title: family, font: Font(EditorFace(preset: .system, family: family).regular(14) as CTFont),
+                            selected: panel.settings.fontFamily == family) {
+                            panel.settings.fontFamily = family
+                        }
+                    }
+                    if filtered.isEmpty {
+                        Text("No fonts match").font(Typo.ui(12.5)).foregroundStyle(theme.faintC).padding(16)
+                    }
+                }
+                .padding(6)
+            }
+        }
+        .frame(width: 290, height: 400)
+        .background(theme.surfaceC)
+        .preferredColorScheme(theme.isDark ? .dark : .light)
+        .onAppear { searchFocused = true }
+    }
+
+    private func header(_ t: String) -> some View {
+        Text(t.uppercased()).font(Typo.ui(10, bold: true)).tracking(0.9).foregroundStyle(theme.faintC)
+            .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
+    }
+
+    private func row(title: String, font: Font, selected: Bool, action: @escaping () -> Void) -> some View {
+        FontRow(title: title, font: font, selected: selected, accent: accent, action: action)
+    }
+}
+
+private struct FontRow: View {
+    let title: String
+    let font: Font
+    let selected: Bool
+    let accent: Color
+    let action: () -> Void
+    @Environment(\.theme) private var theme
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Text(title).font(font).foregroundStyle(theme.textC).lineLimit(1)
+                Spacer()
+                if selected { Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(accent) }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(selected ? accent.opacity(0.14) : (hover ? theme.hover : .clear)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
     }
 }

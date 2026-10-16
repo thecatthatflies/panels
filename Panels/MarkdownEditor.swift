@@ -4,7 +4,7 @@ import AppKit
 // MARK: - Style configuration
 
 struct EditorStyle: Equatable {
-    var font: EditorFont
+    var face: EditorFace
     var size: CGFloat
     var lineHeight: CGFloat
     var rich: Bool
@@ -15,6 +15,9 @@ struct EditorStyle: Equatable {
     var codeBackground: NSColor
     var isDark: Bool
     var knownTitles: Set<String> = []
+    var paragraphGap: CGFloat = 0.2
+    var headingScale: CGFloat = 1
+    var codeScale: CGFloat = 0.88
 }
 
 // MARK: - Markdown styler
@@ -43,10 +46,10 @@ enum MarkdownStyler {
 
         let para = NSMutableParagraphStyle()
         para.lineHeightMultiple = s.lineHeight
-        para.paragraphSpacing = s.size * 0.2
+        para.paragraphSpacing = s.size * s.paragraphGap
 
         let base: [NSAttributedString.Key: Any] = [
-            .font: s.font.regular(s.size),
+            .font: s.face.regular(s.size),
             .foregroundColor: s.text,
             .paragraphStyle: para,
             .underlineStyle: 0,
@@ -57,7 +60,7 @@ enum MarkdownStyler {
         storage.setAttributes(base, range: full)
         guard s.rich, full.length > 0 else { return }
 
-        let mono = NSFont.monospacedSystemFont(ofSize: s.size * 0.88, weight: .regular)
+        let mono = NSFont.monospacedSystemFont(ofSize: s.size * s.codeScale, weight: .regular)
         var inFence = false
         var location = 0
 
@@ -75,7 +78,7 @@ enum MarkdownStyler {
                 let p = NSMutableParagraphStyle()
                 p.lineHeightMultiple = inFence ? max(s.lineHeight - 0.1, 1.1) : 0.62
                 p.paragraphSpacing = 0
-                storage.addAttributes([.paragraphStyle: p, .font: inFence ? mono : s.font.regular(s.size)], range: lineRange)
+                storage.addAttributes([.paragraphStyle: p, .font: inFence ? mono : s.face.regular(s.size)], range: lineRange)
                 continue
             }
 
@@ -99,12 +102,12 @@ enum MarkdownStyler {
             if let m = heading.firstMatch(in: line, range: ls) {
                 let level = m.range(at: 1).length
                 let scale: [CGFloat] = [1.85, 1.5, 1.28, 1.12, 1.0, 0.95]
-                let size = s.size * scale[min(level - 1, 5)]
+                let size = s.size * (1 + (scale[min(level - 1, 5)] - 1) * s.headingScale)
                 let p = NSMutableParagraphStyle()
                 p.lineHeightMultiple = max(s.lineHeight - 0.25, 1.1)
                 p.paragraphSpacingBefore = level <= 2 ? s.size * 0.7 : s.size * 0.3
                 p.paragraphSpacing = s.size * 0.25
-                storage.addAttributes([.font: s.font.bold(size), .paragraphStyle: p], range: content)
+                storage.addAttributes([.font: s.face.bold(size), .paragraphStyle: p], range: content)
                 let marks = NSRange(location: content.location, length: m.range(at: 1).length + m.range(at: 2).length)
                 storage.addAttributes([.foregroundColor: s.faint], range: marks)
                 inlineStart = marks.length
@@ -118,7 +121,7 @@ enum MarkdownStyler {
                 p.headIndent = 14
                 p.paragraphSpacing = s.size * 0.2
                 storage.addAttributes([.paragraphStyle: p, .foregroundColor: s.muted], range: content)
-                storage.addAttributes([.foregroundColor: s.accent, .font: s.font.bold(s.size)],
+                storage.addAttributes([.foregroundColor: s.accent, .font: s.face.bold(s.size)],
                                       range: NSRange(location: content.location, length: m.range.length))
                 inlineStart = m.range.length
             } else if let m = bullet.firstMatch(in: line, range: ls) {
@@ -128,7 +131,7 @@ enum MarkdownStyler {
                 let taskRange = m.range(at: 4)
 
                 let prefix = (line as NSString).substring(to: m.range.length)
-                let width = (prefix as NSString).size(withAttributes: [.font: s.font.regular(s.size)]).width
+                let width = (prefix as NSString).size(withAttributes: [.font: s.face.regular(s.size)]).width
                 let p = NSMutableParagraphStyle()
                 p.lineHeightMultiple = s.lineHeight
                 p.paragraphSpacing = s.size * 0.12
@@ -137,12 +140,12 @@ enum MarkdownStyler {
                 storage.addAttribute(.paragraphStyle, value: p, range: content)
 
                 let markerR = NSRange(location: content.location + indentLen, length: markerLen)
-                storage.addAttributes([.foregroundColor: s.accent, .font: s.font.bold(s.size)], range: markerR)
+                storage.addAttributes([.foregroundColor: s.accent, .font: s.face.bold(s.size)], range: markerR)
 
                 if taskRange.location != NSNotFound {
                     let tr = NSRange(location: content.location + taskRange.location, length: taskRange.length)
                     let done = (line as NSString).substring(with: taskRange).lowercased().contains("x")
-                    storage.addAttributes([.foregroundColor: s.accent, .font: s.font.bold(s.size)], range: tr)
+                    storage.addAttributes([.foregroundColor: s.accent, .font: s.face.bold(s.size)], range: tr)
                     if done {
                         let rest = NSRange(location: tr.location + tr.length, length: max(NSMaxRange(content) - (tr.location + tr.length), 0))
                         storage.addAttributes([.foregroundColor: s.faint, .strikethroughStyle: NSUnderlineStyle.single.rawValue,
@@ -244,10 +247,10 @@ enum MarkdownStyler {
             let size = f.pointSize
             let nf: NSFont
             switch (isB, isI) {
-            case (true, true): nf = s.font.boldItalic(size)
-            case (true, false): nf = s.font.bold(size)
-            case (false, true): nf = s.font.italic(size)
-            default: nf = s.font.regular(size)
+            case (true, true): nf = s.face.boldItalic(size)
+            case (true, false): nf = s.face.bold(size)
+            case (false, true): nf = s.face.italic(size)
+            default: nf = s.face.regular(size)
             }
             storage.addAttribute(.font, value: nf, range: r)
         }
@@ -267,6 +270,11 @@ final class PanelTextView: NSTextView {
     private static let mdLink = try! NSRegularExpression(pattern: "\\[[^\\]\\n]*\\]\\(([^)\\n]+)\\)|https?://[^\\s)>\\]]+")
 
     override var acceptsFirstResponder: Bool { true }
+
+    override func keyDown(with event: NSEvent) {
+        if let kind = SoundClassify.kind(for: event) { Sound.type(kind) }
+        super.keyDown(with: event)
+    }
 
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
@@ -563,7 +571,9 @@ final class NoteEditorHost: NSObject, NSTextViewDelegate, NSTextStorageDelegate 
     let scrollView = NoteScrollView()
     let textView: PanelTextView
     weak var panel: Panel?
-    private var lastStyle: EditorStyle?
+    var lastStyle: EditorStyle?
+    var dictStart: Int?
+    var dictLength = 0
     private var lastWrap: Bool?
     private var applying = false
     private var typewriter = false
@@ -623,7 +633,7 @@ final class NoteEditorHost: NSObject, NSTextViewDelegate, NSTextStorageDelegate 
     func apply(settings st: PanelSettings, theme: Theme) {
         let accent = theme.accentNS(st.accent)
         let style = EditorStyle(
-            font: st.font,
+            face: st.face,
             size: CGFloat(st.fontSize),
             lineHeight: CGFloat(st.lineHeight),
             rich: st.richStyling,
@@ -633,7 +643,10 @@ final class NoteEditorHost: NSObject, NSTextViewDelegate, NSTextStorageDelegate 
             accent: accent,
             codeBackground: theme.isDark ? NSColor.white.withAlphaComponent(0.06) : NSColor.black.withAlphaComponent(0.055),
             isDark: theme.isDark,
-            knownTitles: Workspace.shared.knownNoteTitles()
+            knownTitles: Workspace.shared.knownNoteTitles(),
+            paragraphGap: CGFloat(st.paragraphSpacing),
+            headingScale: CGFloat(st.headingScale),
+            codeScale: CGFloat(st.codeScale)
         )
 
         let modeChanged = typewriter != st.typewriter || dimOthers != st.dimParagraphs
@@ -666,12 +679,12 @@ final class NoteEditorHost: NSObject, NSTextViewDelegate, NSTextStorageDelegate 
         if style != lastStyle {
             lastStyle = style
             textView.typingAttributes = [
-                .font: style.font.regular(style.size),
+                .font: style.face.regular(style.size),
                 .foregroundColor: style.text,
                 .paragraphStyle: {
                     let p = NSMutableParagraphStyle()
                     p.lineHeightMultiple = style.lineHeight
-                    p.paragraphSpacing = style.size * 0.2
+                    p.paragraphSpacing = style.size * style.paragraphGap
                     return p
                 }()
             ]

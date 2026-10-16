@@ -186,6 +186,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Panels;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Panels listens to your microphone only while you are dictating. Audio is processed on this Mac.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Panels turns your speech into text on this Mac while you dictate.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -213,6 +215,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Panels;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Panels listens to your microphone only while you are dictating. Audio is processed on this Mac.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Panels turns your speech into text on this Mac while you dictate.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (

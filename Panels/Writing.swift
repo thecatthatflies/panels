@@ -239,8 +239,8 @@ enum HTMLExporter {
         return out
     }
 
-    static func document(title: String, markdown: String, font: EditorFont) -> String {
-        let family: String
+    static func document(title: String, markdown: String, font: EditorFont, customFamily: String = "") -> String {
+        var family: String
         switch font {
         case .instrument: family = "'Instrument Sans', -apple-system, system-ui, sans-serif"
         case .serif: family = "'New York', Georgia, serif"
@@ -248,6 +248,7 @@ enum HTMLExporter {
         case .rounded: family = "ui-rounded, 'SF Pro Rounded', system-ui, sans-serif"
         case .system: family = "-apple-system, system-ui, sans-serif"
         }
+        if !customFamily.isEmpty { family = "'\(customFamily)', " + family }
         return """
         <!doctype html>
         <html lang="en"><head><meta charset="utf-8">
@@ -281,7 +282,7 @@ enum ExportOps {
     private static var pdfJobs: [PDFJob] = []
 
     static func html(for panel: Panel) -> String {
-        HTMLExporter.document(title: panel.title, markdown: panel.text, font: panel.settings.font)
+        HTMLExporter.document(title: panel.title, markdown: panel.text, font: panel.settings.font, customFamily: panel.settings.fontFamily)
     }
 
     static func saveHTML(_ panel: Panel) {

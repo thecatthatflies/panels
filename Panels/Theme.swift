@@ -166,7 +166,44 @@ final class Appearance {
     var cornerRadius: Double {
         didSet { UserDefaults.standard.set(cornerRadius, forKey: "radius") }
     }
+    var customID: String? {
+        didSet { UserDefaults.standard.set(customID, forKey: "customThemeID") }
+    }
+    var density: Density {
+        didSet { UserDefaults.standard.set(density.rawValue, forKey: "density") }
+    }
+    var headerHeight: Double {
+        didSet { UserDefaults.standard.set(headerHeight, forKey: "headerHeight") }
+    }
     var systemDark: Bool = true
+
+    enum Density: String, CaseIterable, Identifiable {
+        case compact, comfortable, spacious
+        var id: String { rawValue }
+        var label: String { rawValue.capitalized }
+    }
+
+    func apply(density d: Density) {
+        density = d
+        switch d {
+        case .compact: gap = 4; cornerRadius = 9; headerHeight = 32
+        case .comfortable: gap = 8; cornerRadius = 14; headerHeight = 38
+        case .spacious: gap = 14; cornerRadius = 20; headerHeight = 44
+        }
+    }
+
+    var allThemes: [Theme] { Theme.all + ThemeStore.shared.customs.map { $0.build() } }
+
+    /// "auto", a built-in id, or a custom theme id.
+    func select(themeID id: String) {
+        if let c = ThemeChoice(rawValue: id) { customID = nil; choice = c }
+        else if ThemeStore.shared.index(of: id) != nil { customID = id }
+    }
+
+    func isSelected(themeID id: String) -> Bool {
+        if let cid = customID { return cid == id }
+        return choice.rawValue == id
+    }
 
     init() {
         let d = UserDefaults.standard
@@ -174,6 +211,9 @@ final class Appearance {
         translucency = d.object(forKey: "translucency") as? Double ?? 0.82
         gap = d.object(forKey: "gap") as? Double ?? 8
         cornerRadius = d.object(forKey: "radius") as? Double ?? 14
+        customID = d.string(forKey: "customThemeID")
+        density = Density(rawValue: d.string(forKey: "density") ?? "") ?? .comfortable
+        headerHeight = d.object(forKey: "headerHeight") as? Double ?? 38
         refreshSystem()
     }
 
@@ -183,11 +223,12 @@ final class Appearance {
     }
 
     func theme(for space: Space) -> Theme {
-        if let id = space.themeID, let t = Theme.all.first(where: { $0.id == id }) { return t }
+        if let id = space.themeID, let t = allThemes.first(where: { $0.id == id }) { return t }
         return theme
     }
 
     var theme: Theme {
+        if let cid = customID, let spec = ThemeStore.shared.customs.first(where: { $0.id == cid }) { return spec.build() }
         switch choice {
         case .auto: return systemDark ? .granite : .paleSky
         case .granite: return .granite
@@ -288,4 +329,39 @@ enum EditorFont: String, Codable, CaseIterable, Identifiable {
         }
         return base
     }
+}
+
+
+// MARK: - Face: a preset or any installed family
+
+/// What the editor actually draws with. A preset, or any font family installed on this Mac.
+struct EditorFace: Equatable {
+    var preset: EditorFont
+    var family: String
+
+    var label: String { family.isEmpty ? preset.label : family }
+
+    func regular(_ size: CGFloat) -> NSFont { family.isEmpty ? preset.regular(size) : custom(size, bold: false, italic: false) }
+    func bold(_ size: CGFloat) -> NSFont { family.isEmpty ? preset.bold(size) : custom(size, bold: true, italic: false) }
+    func italic(_ size: CGFloat) -> NSFont { family.isEmpty ? preset.italic(size) : custom(size, bold: false, italic: true) }
+    func boldItalic(_ size: CGFloat) -> NSFont { family.isEmpty ? preset.boldItalic(size) : custom(size, bold: true, italic: true) }
+
+    private func custom(_ size: CGFloat, bold: Bool, italic: Bool) -> NSFont {
+        let fm = NSFontManager.shared
+        var traits: NSFontTraitMask = []
+        if bold { traits.insert(.boldFontMask) }
+        if italic { traits.insert(.italicFontMask) }
+        if let f = fm.font(withFamily: family, traits: traits, weight: bold ? 9 : 5, size: size) { return f }
+        if let base = fm.font(withFamily: family, traits: [], weight: 5, size: size) {
+            var f = base
+            if bold { f = fm.convert(f, toHaveTrait: .boldFontMask) }
+            if italic { f = fm.convert(f, toHaveTrait: .italicFontMask) }
+            return f
+        }
+        return bold ? preset.bold(size) : preset.regular(size)
+    }
+}
+
+extension PanelSettings {
+    var face: EditorFace { EditorFace(preset: font, family: fontFamily) }
 }

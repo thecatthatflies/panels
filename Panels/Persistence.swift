@@ -4,6 +4,7 @@ import AppKit
 struct WorkspaceSnapshot: Codable {
     var spaces: [Space]
     var active: UUID
+    var popouts: [Popout]?
 }
 
 enum Persistence {
@@ -33,7 +34,7 @@ enum Persistence {
     static func saveNow() {
         dirty = false
         let ws = Workspace.shared
-        let snap = WorkspaceSnapshot(spaces: ws.spaces, active: ws.activeSpaceID)
+        let snap = WorkspaceSnapshot(spaces: ws.spaces, active: ws.activeSpaceID, popouts: ws.popouts)
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? enc.encode(snap) else { return }

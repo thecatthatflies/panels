@@ -38,7 +38,13 @@ final class DragRegionView: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 {
-            window?.performZoom(nil)
+            // Honors System Settings > Desktop & Dock > Double-click a window's title bar to.
+            let action = UserDefaults(suiteName: "Apple Global Domain")?.string(forKey: "AppleActionOnDoubleClick") ?? "Maximize"
+            switch action {
+            case "Minimize": window?.performMiniaturize(nil)
+            case "None": break
+            default: window?.performZoom(nil)
+            }
         } else {
             window?.performDrag(with: event)
         }
@@ -74,6 +80,8 @@ struct WindowConfigurator: NSViewRepresentable {
         w.isMovableByWindowBackground = false
         w.minSize = NSSize(width: 760, height: 500)
         w.collectionBehavior.insert(.fullScreenPrimary)
+        WindowChrome.mainWindow = w
+        WindowChrome.restoreFrameOnce(w)
         WindowChrome.install(on: w)
     }
 }
@@ -94,6 +102,25 @@ enum WindowChrome {
     static var barLeadingGap: CGFloat { normalInset + lightsExtent + 14 }
 
     private static let kinds: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+
+    private static var framed = Set<ObjectIdentifier>()
+    static weak var mainWindow: NSWindow?
+
+    /// Uses the system's window restoration: the last frame comes back, and the first launch sizes the window
+    /// from the screen instead of a fixed number.
+    static func restoreFrameOnce(_ window: NSWindow) {
+        let key = ObjectIdentifier(window)
+        guard !framed.contains(key) else { return }
+        framed.insert(key)
+        let name = "PanelsMainWindow"
+        if !window.setFrameUsingName(name) {
+            let vf = (window.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+            let w = min(max(vf.width * 0.78, 960), vf.width)
+            let h = min(max(vf.height * 0.82, 640), vf.height)
+            window.setFrame(NSRect(x: vf.midX - w / 2, y: vf.midY - h / 2, width: w, height: h), display: true)
+        }
+        window.setFrameAutosaveName(name)
+    }
 
     static func install(on window: NSWindow) {
         layoutTrafficLights(window)
@@ -443,4 +470,21 @@ final class HostContainer: NSView {
         super.setFrameSize(newSize)
         if let c = child, c.superview === self { c.frame = bounds }
     }
+}
+
+
+// MARK: - Motion
+
+/// One place for animation timing so everything feels equally quick.
+enum Motion {
+    /// Follows the macOS Reduce Motion setting: no animation at all when it is on.
+    static var reduced: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    /// Panels opening, closing, moving, resizing.
+    static var layout: Animation? { reduced ? nil : .snappy(duration: 0.22, extraBounce: 0) }
+    /// Switching workspaces: nearly instant, just enough to avoid a hard cut.
+    static var swap: Animation? { reduced ? nil : .easeOut(duration: 0.12) }
+    /// Small state changes: hover, selection, toggles.
+    static var quick: Animation? { reduced ? nil : .snappy(duration: 0.16, extraBounce: 0) }
+    /// A panel fading in after it is created.
+    static var appear: Animation? { reduced ? nil : .easeOut(duration: 0.16) }
 }
