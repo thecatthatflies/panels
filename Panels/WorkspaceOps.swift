@@ -71,9 +71,7 @@ final class TemplateStore {
     }
 
     private static var fileURL: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("Panels", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = AppPaths.dir
         return dir.appendingPathComponent("templates.json")
     }
 
@@ -322,7 +320,54 @@ enum FileOps {
     }
 
     static func revealDataFolder() {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        NSWorkspace.shared.activateFileViewerSelecting([base.appendingPathComponent("Panels")])
+        NSWorkspace.shared.activateFileViewerSelecting([AppPaths.dir])
+    }
+}
+
+
+// MARK: - Reopen the last closed panel, workspace or window
+
+extension Workspace {
+    var reopenLabel: String {
+        guard let last = closedStack.last else { return "Reopen Closed" }
+        return "Reopen \(last.label)"
+    }
+
+    func reopenLast() {
+        guard let item = closedStack.popLast() else { return }
+        switch item {
+        case .space(let sp, let index):
+            let idx = min(index, spaces.count)
+            withAnimation(Motion.swap) {
+                spaces.insert(sp, at: idx)
+                activeSpaceID = sp.id
+            }
+            Sound.play(.open)
+            showToast("Reopened \(sp.name)")
+
+        case .panel(let panel, let spaceID, let siblingID, let axis):
+            let target = spaces.first { $0.id == spaceID } ?? space
+            if target.id != activeSpaceID { selectSpace(target.id) }
+            withAnimation(Motion.layout) {
+                if target.root.isEmpty {
+                    target.root = Node(panel: panel)
+                } else if let sid = siblingID, let sibling = target.root.leaf(for: sid) {
+                    insert(panel, beside: sibling, axis: axis, before: false, in: target)
+                } else if let last = target.root.leaves().last {
+                    insert(panel, beside: last, axis: .horizontal, before: false, in: target)
+                }
+            }
+            target.focusedID = panel.id
+            Sound.play(.open)
+            showToast("Reopened \(panel.title)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { Runtime.shared.makeFirstResponder(for: panel.id) }
+
+        case .popout(let po):
+            popouts.append(po)
+            PopoutManager.shared.open(po, near: nil)
+            Sound.play(.open)
+            showToast("Reopened \(po.panel.title)")
+        }
+        Persistence.markDirty()
     }
 }

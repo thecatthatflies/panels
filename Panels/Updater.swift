@@ -203,6 +203,8 @@ final class Updater: NSObject, URLSessionDownloadDelegate {
                 }
                 self.state = .ready(release, app)
                 Sound.play(.update)
+                // Test hook for the end-to-end update test: install without clicking the pill.
+                if ProcessInfo.processInfo.environment["PANELS_UPDATE_AUTOINSTALL"] == "1" { self.installAndRelaunch() }
             }
         }
     }

@@ -623,6 +623,7 @@ final class SoundEngine {
     private let queue = DispatchQueue(label: "panels.sound", qos: .userInitiated)
 
     private var prefs: SoundPrefs { SoundSettings.shared.prefs }
+    var isEngineRunning: Bool { engine.isRunning }
 
     // MARK: lifecycle
 

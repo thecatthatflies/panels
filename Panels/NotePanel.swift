@@ -33,7 +33,7 @@ enum MarkdownParser {
     private static let rule = try! NSRegularExpression(pattern: "^\\s{0,3}([-*_])(\\s*\\1){2,}\\s*$")
     private static let fence = try! NSRegularExpression(pattern: "^\\s*(```|~~~)\\s*([\\w+-]*)")
     private static let image = try! NSRegularExpression(pattern: "^\\s*!\\[(.*?)\\]\\((.*?)\\)\\s*$")
-    private static let tableSep = try! NSRegularExpression(pattern: "^\\s*\\|?\\s*:?-{2,}:?\\s*(\\|\\s*:?-{2,}:?\\s*)*\\|?\\s*$")
+    private static let tableSep = try! NSRegularExpression(pattern: "^\\s*\\|?\\s*:?-+:?\\s*(\\|\\s*:?-+:?\\s*)*\\|?\\s*$")
 
     private static func matches(_ re: NSRegularExpression, _ s: String) -> NSTextCheckingResult? {
         re.firstMatch(in: s, range: NSRange(location: 0, length: (s as NSString).length))

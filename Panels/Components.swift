@@ -130,9 +130,11 @@ enum WindowChrome {
         window.acceptsMouseMovedEvents = true
         let nc = NotificationCenter.default
         for name in [NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification,
-                     NSWindow.didExitFullScreenNotification, NSWindow.didBecomeKeyNotification] {
+                     NSWindow.didExitFullScreenNotification, NSWindow.didBecomeKeyNotification,
+                     NSWindow.didResignKeyNotification, NSWindow.didBecomeMainNotification] {
             nc.addObserver(forName: name, object: window, queue: .main) { _ in layoutTrafficLights(window) }
         }
+        nc.addObserver(forName: NSWindow.didUpdateNotification, object: window, queue: .main) { _ in enforce(window) }
     }
 
     /// Positions the lights for the current mode. Lock In pulls them tighter into the corner and hides them
@@ -164,17 +166,36 @@ enum WindowChrome {
         }
     }
 
+    private static var settling = false
+
+    /// Moves the lights for the current mode, then re-applies the final position once the layout has settled,
+    /// because AppKit re-lays out the titlebar when the toolbar area changes and would undo a single move.
     static func refresh(animated: Bool) {
-        for w in NSApp.windows where w.standardWindowButton(.closeButton) != nil {
-            layoutTrafficLights(w, animated: animated)
+        settling = true
+        if let w = mainWindow { layoutTrafficLights(w, animated: animated) }
+        for delay in [0.15, 0.5, 0.9] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                if let w = mainWindow { layoutTrafficLights(w, animated: false) }
+            }
         }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { settling = false }
+    }
+
+    /// Cheap per-update check: if the system moved the lights, put them back.
+    static func enforce(_ window: NSWindow) {
+        guard !settling, window === mainWindow else { return }
+        let locked = Workspace.shared.focusMode
+        let inset = locked ? lockedInset : normalInset
+        guard let b = window.standardWindowButton(.closeButton), let sup = b.superview else { return }
+        let wantY = sup.frame.height - inset - buttonSize
+        if abs(b.frame.origin.x - inset) > 0.5 || abs(b.frame.origin.y - wantY) > 0.5 { layoutTrafficLights(window) }
     }
 
     static func setTrafficLights(hidden: Bool) {
         lockRevealed = !hidden
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.35
-            for w in NSApp.windows {
+            if let w = mainWindow {
                 for k in kinds { w.standardWindowButton(k)?.animator().alphaValue = hidden ? 0 : 1 }
             }
         }

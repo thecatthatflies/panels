@@ -83,6 +83,7 @@ extension Workspace {
     }
 
     func closePopout(_ panelID: UUID) {
+        if let po = popout(for: panelID) { pushClosed(.popout(po)) }
         PopoutManager.shared.closeWindow(panelID)
         popouts.removeAll { $0.panel.id == panelID }
         Runtime.shared.release(panelID)

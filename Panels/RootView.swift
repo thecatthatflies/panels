@@ -16,8 +16,6 @@ struct RootView: View {
                 if !locked {
                     TopBar()
                         .transition(.move(edge: .top).combined(with: .opacity))
-                } else {
-                    Spacer().frame(height: 18)
                 }
                 SpaceContent()
             }
@@ -109,7 +107,7 @@ struct SpaceContent: View {
         let s = ws.space
         let gap = CGFloat(appearance.gap)
         let locked = ws.focusMode
-        let side = locked ? max(gap * 3, 28) : gap + 2
+        let side = locked ? 0 : gap + 2
 
         Group {
             if let zid = s.zoomedID, let p = s.panels.first(where: { $0.id == zid }) {
@@ -121,7 +119,7 @@ struct SpaceContent: View {
             }
         }
         .padding(.horizontal, side)
-        .padding(.bottom, locked ? max(gap * 3, 28) + 36 : gap + 2)
+        .padding(.bottom, locked ? 0 : gap + 2)
         .id(s.id)
     }
 }

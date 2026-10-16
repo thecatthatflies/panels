@@ -109,6 +109,10 @@ struct CommandPalette: View {
             out.append(PaletteItem(id: "dock-\(po.panel.id)", title: "Return to App: \(po.panel.title)", subtitle: "Pop-out window",
                                    symbol: "arrow.uturn.backward.square", keywords: "dock window popout", shortcut: nil) { ws.dock(po.panel.id) })
         }
+        if !ws.closedStack.isEmpty {
+            out.append(PaletteItem(id: "reopen", title: ws.reopenLabel, subtitle: "Undo the last close",
+                                   symbol: "arrow.uturn.backward", keywords: "undo restore closed back", shortcut: "Cmd Shift T") { ws.reopenLast() })
+        }
         out.append(PaletteItem(id: "equalize", title: "Even Out Sizes", subtitle: "Give every panel equal room",
                                symbol: "equal.square", keywords: "balance resize reset", shortcut: "Cmd Option =") { ws.equalize() })
         for preset in LayoutPreset.allCases {

@@ -20,7 +20,7 @@ struct PanelView: View {
     private var isFocused: Bool { ws.space.focusedID == panel.id }
     private var accent: Color { theme.accent(panel.settings.accent) }
     private var locked: Bool { ws.focusMode }
-    private var radius: CGFloat { CGFloat(appearance.cornerRadius) + (locked ? 6 : 0) }
+    private var radius: CGFloat { locked ? 0 : CGFloat(appearance.cornerRadius) }
     private var order: Int { ws.space.panels.firstIndex { $0.id == panel.id } ?? 0 }
     private var isZoomed: Bool { ws.space.zoomedID == panel.id }
     private var showActions: Bool { !locked && (hovering || showSettings || isFocused) }
@@ -30,9 +30,12 @@ struct PanelView: View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
 
         VStack(spacing: 0) {
-            header
+            if !locked { header }
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .overlay(alignment: .top) {
+            if locked { WindowDragRegion().frame(height: 26) }
         }
         .background { surfaceBackground(shape) }
         .clipShape(shape)

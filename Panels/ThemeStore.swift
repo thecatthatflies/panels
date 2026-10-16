@@ -61,9 +61,7 @@ final class ThemeStore {
     }
 
     private static var fileURL: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("Panels", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = AppPaths.dir
         return dir.appendingPathComponent("themes.json")
     }
 
@@ -98,30 +96,39 @@ final class ThemeStore {
         for s in Workspace.shared.spaces where s.themeID == id { s.themeID = nil }
     }
 
+    /// Panels are shown as sheets on the front window so cancelling never touches the Settings window itself.
+    private func present(_ panel: NSSavePanel, _ done: @escaping (NSApplication.ModalResponse) -> Void) {
+        if let w = NSApp.keyWindow { panel.beginSheetModal(for: w, completionHandler: done) }
+        else { done(panel.runModal()) }
+    }
+
     func exportTheme(_ spec: CustomThemeSpec) {
         let sp = NSSavePanel()
         sp.nameFieldStringValue = spec.name + ".panelstheme"
         sp.allowedContentTypes = [.json]
-        guard sp.runModal() == .OK, let url = sp.url else { return }
-        let enc = JSONEncoder()
-        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? enc.encode(spec) { try? data.write(to: url, options: .atomic) }
+        present(sp) { response in
+            guard response == .OK, let url = sp.url else { return }
+            let enc = JSONEncoder()
+            enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+            if let data = try? enc.encode(spec) { try? data.write(to: url, options: .atomic) }
+        }
     }
 
-    @discardableResult
-    func importTheme() -> CustomThemeSpec? {
+    func importTheme(then completion: @escaping (CustomThemeSpec) -> Void) {
         let op = NSOpenPanel()
         op.allowedContentTypes = [.json]
         op.allowsMultipleSelection = false
-        guard op.runModal() == .OK, let url = op.url,
-              let data = try? Data(contentsOf: url),
-              var spec = try? JSONDecoder().decode(CustomThemeSpec.self, from: data) else {
-            Workspace.shared.showToast("That file is not a Panels theme")
-            return nil
+        present(op) { [weak self] response in
+            guard response == .OK, let url = op.url else { return }   // cancel does nothing
+            guard let self, let data = try? Data(contentsOf: url),
+                  var spec = try? JSONDecoder().decode(CustomThemeSpec.self, from: data) else {
+                Workspace.shared.showToast("That file is not a Panels theme")
+                return
+            }
+            spec.id = "custom-" + UUID().uuidString.prefix(8).lowercased()
+            self.customs.append(spec)
+            completion(spec)
         }
-        spec.id = "custom-" + UUID().uuidString.prefix(8).lowercased()
-        customs.append(spec)
-        return spec
     }
 }
 
@@ -140,7 +147,7 @@ struct ThemesSettings: View {
                     Text("Themes").font(Typo.ui(15, bold: true)).foregroundStyle(theme.textC)
                     Spacer()
                     IconButton(symbol: "square.and.arrow.down", help: "Import a theme", size: 12, box: 26) {
-                        if let s = store.importTheme() { selected = s.id }
+                        store.importTheme { spec in selected = spec.id }
                     }
                     IconButton(symbol: "plus", help: "New theme from the current one", size: 12, box: 26) {
                         let s = store.add(from: appearance.theme, name: "My theme")
@@ -166,8 +173,16 @@ struct ThemesSettings: View {
             Rectangle().fill(theme.hairline).frame(width: 1)
 
             Group {
-                if let id = selected, let i = store.index(of: id) {
-                    CustomThemeEditor(spec: Binding(get: { store.customs[i] }, set: { store.customs[i] = $0 }))
+                if let id = selected, store.index(of: id) != nil {
+                    // Look the theme up by id on every access so a deleted theme can never index out of range.
+                    CustomThemeEditor(
+                        spec: Binding(
+                            get: { store.customs.first { $0.id == id } ?? CustomThemeSpec(name: "", from: .granite) },
+                            set: { new in if let i = store.index(of: id) { store.customs[i] = new } }),
+                        onDelete: {
+                            selected = Theme.all.first?.id
+                            store.remove(id)
+                        })
                         .id(id)
                 } else if let id = selected, let t = Theme.all.first(where: { $0.id == id }) {
                     builtInDetail(t)
@@ -226,6 +241,7 @@ struct ThemesSettings: View {
 
 struct CustomThemeEditor: View {
     @Binding var spec: CustomThemeSpec
+    var onDelete: () -> Void = {}
     @Environment(\.theme) private var theme
     private let store = ThemeStore.shared
     private let appearance = Appearance.shared
@@ -257,7 +273,7 @@ struct CustomThemeEditor: View {
                     Button { appearance.select(themeID: spec.id) } label: { Label("Use This Theme", systemImage: "checkmark.circle") }
                     Button { store.exportTheme(spec) } label: { Label("Export", systemImage: "square.and.arrow.up") }
                     Spacer()
-                    Button(role: .destructive) { store.remove(spec.id) } label: { Label("Delete", systemImage: "trash") }
+                    Button(role: .destructive) { onDelete() } label: { Label("Delete", systemImage: "trash") }
                 }
             }
             .padding(26)

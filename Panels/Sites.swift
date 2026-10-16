@@ -35,9 +35,7 @@ final class SiteLibrary {
     }
 
     private static var fileURL: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("Panels", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = AppPaths.dir
         return dir.appendingPathComponent("sites.json")
     }
 

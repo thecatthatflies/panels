@@ -471,6 +471,23 @@ enum LayoutPreset: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Undo for closing things
+
+/// Anything closed in the window can be brought back with Cmd Shift T, most recent first.
+enum ClosedItem {
+    case panel(Panel, spaceID: UUID, siblingID: UUID?, axis: SplitAxis)
+    case space(Space, index: Int)
+    case popout(Popout)
+
+    var label: String {
+        switch self {
+        case .panel(let p, _, _, _): return "Panel \"\(p.title)\""
+        case .space(let s, _): return "Workspace \"\(s.name)\""
+        case .popout(let po): return "Window \"\(po.panel.title)\""
+        }
+    }
+}
+
 // MARK: - Workspace
 
 @Observable
@@ -491,7 +508,7 @@ final class Workspace {
     var webEpoch: [UUID: Int] = [:]
     var floating = false
     @ObservationIgnored var preFocusZoom: UUID?
-    @ObservationIgnored var closedSpaces: [(space: Space, index: Int)] = []
+    var closedStack: [ClosedItem] = []
 
     @ObservationIgnored var frames: [UUID: CGRect] = [:]
     @ObservationIgnored private var toastTask: Task<Void, Never>?
@@ -652,6 +669,17 @@ final class Workspace {
         guard let leaf = s.root.leaf(for: panelID) else { return }
         let order = s.panels.map { $0.id }
         let idx = order.firstIndex(of: panelID) ?? 0
+        if let closing = leaf.panel {
+            var sibling: UUID?
+            var axis: SplitAxis = .horizontal
+            if let (parent, i) = s.root.parent(of: leaf) {
+                axis = parent.axis
+                let neighbor = i > 0 ? parent.children[i - 1] : (i + 1 < parent.children.count ? parent.children[i + 1] : nil)
+                sibling = neighbor?.leaves().first?.panel?.id
+            }
+            pushClosed(.panel(closing, spaceID: s.id, siblingID: sibling, axis: axis))
+            showToast("Closed \(closing.title). Cmd Shift T to undo")
+        }
         withAnimation(Motion.layout) {
             if s.root === leaf {
                 s.root = Node.empty()
@@ -765,8 +793,7 @@ final class Workspace {
     func closeSpace(_ id: UUID) {
         guard spaces.count > 1, let idx = spaces.firstIndex(where: { $0.id == id }) else { return }
         let removed = spaces[idx]
-        closedSpaces.append((removed, idx))
-        if closedSpaces.count > 8 { closedSpaces.removeFirst() }
+        pushClosed(.space(removed, index: idx))
         withAnimation(Motion.swap) {
             spaces.remove(at: idx)
             if activeSpaceID == id { activeSpaceID = spaces[max(0, idx - 1)].id }
@@ -776,15 +803,9 @@ final class Workspace {
         showToast("Closed \(removed.name). Cmd Shift T brings it back")
     }
 
-    func reopenClosedSpace() {
-        guard let last = closedSpaces.popLast() else { return }
-        let idx = min(last.index, spaces.count)
-        withAnimation(Motion.swap) {
-            spaces.insert(last.space, at: idx)
-            activeSpaceID = last.space.id
-        }
-        Persistence.markDirty()
-        showToast("Reopened \(last.space.name)")
+    func pushClosed(_ item: ClosedItem) {
+        closedStack.append(item)
+        if closedStack.count > 20 { closedStack.removeFirst() }
     }
 
     func selectSpace(_ id: UUID) {

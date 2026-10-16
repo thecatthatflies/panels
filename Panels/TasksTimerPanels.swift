@@ -175,6 +175,7 @@ final class TimerModel {
     var finished = false
     var interaction: Interaction = .none
     var interactionTick = 0
+    var bonus = 0                       // seconds added with +1 / +5 while running
     @ObservationIgnored private var endDate: Date?
     @ObservationIgnored private var ticker: Timer?
     @ObservationIgnored weak var panel: Panel?
@@ -186,18 +187,27 @@ final class TimerModel {
 
     deinit { ticker?.invalidate() }
 
+    /// Test hook: PANELS_TIMER_SPEED=30 makes the clock run 30x faster. Defaults to real time.
+    private static let speed: Double = Double(ProcessInfo.processInfo.environment["PANELS_TIMER_SPEED"] ?? "") ?? 1
+
     var settings: PanelSettings { panel?.settings ?? PanelSettings() }
+    var endsAt: Date? { endDate }
 
     var isLongBreak: Bool {
         phase == .rest && sessions > 0 && sessions % max(settings.sessionsBeforeLong, 1) == 0
     }
 
-    var total: Int {
+    var baseSeconds: Int {
         switch phase {
         case .focus: return settings.focusMinutes * 60
         case .rest: return (isLongBreak ? settings.longBreakMinutes : settings.breakMinutes) * 60
         }
     }
+
+    var total: Int { baseSeconds + bonus }
+
+    /// Minutes currently chosen for this phase (what the dial and presets edit).
+    var chosenMinutes: Int { baseSeconds / 60 }
 
     var progress: Double { total == 0 ? 0 : 1 - Double(remaining) / Double(total) }
 
@@ -205,7 +215,7 @@ final class TimerModel {
         if finished { return .done }
         switch phase {
         case .focus: return running ? .running : (remaining >= total ? .idle : .paused)
-        case .rest: return running ? .resting : .restReady
+        case .rest: return running ? .resting : (remaining >= total ? .restReady : .paused)
         }
     }
 
@@ -226,7 +236,7 @@ final class TimerModel {
         finished = false
         running = true
         touch(.start)
-        endDate = Date().addingTimeInterval(TimeInterval(remaining))
+        endDate = Date().addingTimeInterval(TimeInterval(remaining) / Self.speed)
         ticker?.invalidate()
         ticker = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
     }
@@ -240,10 +250,29 @@ final class TimerModel {
         endDate = nil
     }
 
+    func selectPhase(_ p: Phase) {
+        guard !running, remaining >= total, phase != p else { return }
+        phase = p
+        bonus = 0
+        remaining = total
+        touch(.adjust)
+        Sound.play(.tick)
+    }
+
+    func extend(minutes: Int) {
+        guard display == .running || display == .resting || display == .paused else { return }
+        bonus += minutes * 60
+        remaining += minutes * 60
+        if running, let end = endDate { endDate = end.addingTimeInterval(TimeInterval(minutes * 60) / Self.speed) }
+        touch(.adjust)
+        Sound.play(.tick)
+    }
+
     func reset() {
         let was = running
         if was { running = false; ticker?.invalidate(); ticker = nil; endDate = nil }
         finished = false
+        bonus = 0
         remaining = total
         touch(.reset)
     }
@@ -260,7 +289,21 @@ final class TimerModel {
         guard !running, remaining >= total, let panel else { return }
         switch phase {
         case .focus: panel.settings.focusMinutes = min(max(panel.settings.focusMinutes + minutes, 1), 180)
-        case .rest: panel.settings.breakMinutes = min(max(panel.settings.breakMinutes + minutes, 1), 60)
+        case .rest:
+            if isLongBreak { panel.settings.longBreakMinutes = min(max(panel.settings.longBreakMinutes + minutes, 1), 90) }
+            else { panel.settings.breakMinutes = min(max(panel.settings.breakMinutes + minutes, 1), 60) }
+        }
+        remaining = total
+        touch(.adjust)
+        Sound.play(.tick)
+    }
+
+    func set(minutes: Int) {
+        guard !running, remaining >= total, let panel else { return }
+        switch phase {
+        case .focus: panel.settings.focusMinutes = min(max(minutes, 1), 180)
+        case .rest:
+            if isLongBreak { panel.settings.longBreakMinutes = minutes } else { panel.settings.breakMinutes = minutes }
         }
         remaining = total
         touch(.adjust)
@@ -269,7 +312,7 @@ final class TimerModel {
 
     private func tick() {
         guard let end = endDate else { return }
-        let left = Int(ceil(end.timeIntervalSinceNow))
+        let left = Int(ceil(end.timeIntervalSinceNow * Self.speed))
         if left <= 0 { complete() }
         else if left != remaining { remaining = left }
     }
@@ -294,6 +337,7 @@ final class TimerModel {
 
     private func switchPhase() {
         phase = phase == .focus ? .rest : .focus
+        bonus = 0
         remaining = total
     }
 
@@ -302,248 +346,415 @@ final class TimerModel {
 
 // MARK: - Timer view
 
+/// Adapts to the room it has: a single row when tiny, ring beside controls when wide, stacked when tall.
 struct TimerPanelView: View {
     @Bindable var panel: Panel
     @Environment(\.theme) private var theme
-    @State private var dragAccum: CGFloat = 0
-    @State private var hovering = false
 
     private var focusTint: Color { theme.accent(panel.settings.accent) }
     private var restTint: Color { Color(hex: AccentID.granite.hex ?? 0x6FA39F) }
 
-    private struct Kick { var scale = 1.0; var rotation = 0.0; var shift = 0.0 }
+    private enum Mode { case compact, wide, tall }
 
     var body: some View {
         let model = Runtime.shared.timer(for: panel)
         let display = model.display
-        let tint = (model.phase == .rest || display == .resting) ? restTint : focusTint
+        let tint = model.phase == .rest ? restTint : focusTint
 
         GeometryReader { geo in
-            let side = max(min(geo.size.width * 0.62, geo.size.height * 0.56, 270), 110)
-            let spec = shapeSpec(display, side: side)
+            let w = geo.size.width, h = geo.size.height
+            let mode: Mode = (h < 190 || w < 230) ? .compact : ((w / h > 1.45 && h < 460) ? .wide : .tall)
 
-            VStack(spacing: 22) {
-                ZStack {
-                    // soft glow behind the shape
-                    Circle()
-                        .fill(RadialGradient(colors: [tint.opacity(display == .running || display == .resting ? 0.20 : 0.08), .clear],
-                                             center: .center, startRadius: 4, endRadius: side * 0.95))
-                        .frame(width: side * 2, height: side * 2)
-                        .allowsHitTesting(false)
-
-                    if display == .done { ripples(tint: tint, side: side) }
-
-                    morphShape(model: model, display: display, tint: tint, spec: spec)
-                        .keyframeAnimator(initialValue: Kick(), trigger: model.interactionTick) { view, v in
-                            view.scaleEffect(v.scale).rotationEffect(.degrees(v.rotation)).offset(x: v.shift)
-                        } keyframes: { _ in
-                            KeyframeTrack(\.scale) {
-                                switch model.interaction {
-                                case .start: SpringKeyframe(0.9, duration: 0.12); SpringKeyframe(1.0, spring: .bouncy)
-                                case .pause: SpringKeyframe(0.96, duration: 0.1); SpringKeyframe(1.0, spring: .smooth)
-                                case .reset: SpringKeyframe(0.94, duration: 0.1); SpringKeyframe(1.0, spring: .bouncy)
-                                case .finish: SpringKeyframe(1.08, duration: 0.2); SpringKeyframe(1.0, spring: .bouncy)
-                                default: LinearKeyframe(1.0, duration: 0.01)
-                                }
-                            }
-                            KeyframeTrack(\.rotation) {
-                                if model.interaction == .reset { SpringKeyframe(-14, duration: 0.12); SpringKeyframe(0, spring: .bouncy) }
-                                else if model.interaction == .skip { SpringKeyframe(10, duration: 0.1); SpringKeyframe(0, spring: .bouncy) }
-                                else { LinearKeyframe(0, duration: 0.01) }
-                            }
-                            KeyframeTrack(\.shift) {
-                                if model.interaction == .skip { SpringKeyframe(-12, duration: 0.1); SpringKeyframe(0, spring: .smooth) }
-                                else { LinearKeyframe(0, duration: 0.01) }
-                            }
+            Group {
+                switch mode {
+                case .compact:
+                    compact(model, display, tint, width: w)
+                case .wide:
+                    let ring = max(min(h - 44, w * 0.42, 300), 120)
+                    HStack(spacing: 30) {
+                        TimerRing(panel: panel, model: model, display: display, tint: tint, size: ring)
+                        VStack(alignment: .leading, spacing: 14) {
+                            phaseTabs(model, display, tint)
+                            pickerOrExtend(model, display, tint)
+                            actions(model, display, tint, fill: false)
+                            if h > 300 { sessionDots(model, tint) }
                         }
+                        .frame(maxWidth: 320)
+                    }
+                    .padding(.horizontal, 26)
+                case .tall:
+                    let reserved: CGFloat = 40 + 38 + 52 + (h > 430 ? 22 : 0) + 18 * 4 + 40
+                    let ring = max(min(w - 64, h - reserved, 300), 120)
+                    VStack(spacing: 18) {
+                        phaseTabs(model, display, tint)
+                        TimerRing(panel: panel, model: model, display: display, tint: tint, size: ring)
+                        pickerOrExtend(model, display, tint)
+                        actions(model, display, tint, fill: true)
+                        if h > 430 { sessionDots(model, tint) }
+                    }
+                    .padding(.horizontal, 22)
                 }
-                .frame(height: side * 1.25)
-
-                controls(model: model, display: display, tint: tint)
-
-                sessionDots(model: model, tint: tint)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .animation(Motion.layout, value: display)
         .onChange(of: panel.settings.focusMinutes) { _, _ in model.syncDurations() }
         .onChange(of: panel.settings.breakMinutes) { _, _ in model.syncDurations() }
         .onChange(of: panel.settings.longBreakMinutes) { _, _ in model.syncDurations() }
     }
 
-    // MARK: shape
+    // MARK: compact row
 
-    private struct ShapeSpec { var width: CGFloat; var height: CGFloat; var corner: CGFloat }
-
-    private func shapeSpec(_ d: TimerModel.Display, side: CGFloat) -> ShapeSpec {
-        switch d {
-        case .idle: return ShapeSpec(width: side, height: side, corner: side * 0.30)
-        case .running: return ShapeSpec(width: side, height: side, corner: side * 0.5)
-        case .paused: return ShapeSpec(width: side * 1.28, height: side * 0.5, corner: side * 0.25)
-        case .resting: return ShapeSpec(width: side * 0.94, height: side * 0.94, corner: side * 0.40)
-        case .restReady: return ShapeSpec(width: side * 1.1, height: side * 0.66, corner: side * 0.33)
-        case .done: return ShapeSpec(width: side * 1.06, height: side * 1.06, corner: side * 0.53)
-        }
-    }
-
-    @ViewBuilder
-    private func morphShape(model: TimerModel, display: TimerModel.Display, tint: Color, spec: ShapeSpec) -> some View {
-        let outline = RoundedRectangle(cornerRadius: spec.corner, style: .continuous)
-        let showProgress = display == .running || display == .paused || display == .resting
-
-        ZStack {
-            outline.fill(theme.raisedC)
-            outline.fill(LinearGradient(colors: [tint.opacity(0.26), tint.opacity(0.05)], startPoint: .topLeading, endPoint: .bottomTrailing))
-            outline.strokeBorder(theme.hairlineStrong, lineWidth: 1)
-
-            if showProgress {
-                outline.inset(by: 6)
-                    .stroke(theme.hairline, lineWidth: 4)
-                outline.inset(by: 6)
-                    .trim(from: 0, to: max(model.progress, 0.003))
-                    .stroke(tint, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                    .animation(.linear(duration: 0.3), value: model.progress)
-            }
-
-            content(model: model, display: display, tint: tint, side: spec.width)
-        }
-        .frame(width: spec.width, height: spec.height)
-        .scaleEffect(display == .running || display == .resting ? breathing : 1)
-        .shadow(color: theme.shadow.opacity(0.5), radius: 14, y: 6)
-        .contentShape(outline)
-        .onTapGesture { if display == .done { return }; model.toggle() }
-        .gesture(
-            DragGesture(minimumDistance: 8)
-                .onChanged { v in
-                    guard display == .idle || display == .restReady else { return }
-                    dragAccum = -v.translation.height
-                    let steps = Int(dragAccum / 10)
-                    if steps != 0 { model.adjust(by: steps); dragAccum = 0 }
-                }
-                .onEnded { _ in dragAccum = 0 }
-        )
-        .onHover { hovering = $0 }
-        .animation(.spring(response: 0.62, dampingFraction: 0.74), value: display)
-        .help(display == .running || display == .resting ? "Pause" : "Start. Drag up or down to change the length")
-    }
-
-    private var breathing: CGFloat { 1 }
-
-    @ViewBuilder
-    private func content(model: TimerModel, display: TimerModel.Display, tint: Color, side: CGFloat) -> some View {
-        switch display {
-        case .idle:
-            VStack(spacing: 2) {
-                Text("\(panel.settings.focusMinutes)")
-                    .font(Typo.ui(side * 0.30, bold: true))
-                    .monospacedDigit()
-                    .foregroundStyle(theme.textC)
-                    .contentTransition(.numericText())
-                Text("minutes").font(Typo.ui(12.5, bold: true)).foregroundStyle(tint)
-                Text(hovering ? "drag to change" : " ").font(Typo.ui(10.5)).foregroundStyle(theme.faintC)
-            }
-            .transition(.opacity.combined(with: .scale(scale: 0.9)))
-        case .running, .resting:
-            VStack(spacing: 4) {
-                Text(model.clock(model.remaining))
-                    .font(Typo.ui(side * 0.21, bold: true))
+    private func compact(_ model: TimerModel, _ display: TimerModel.Display, _ tint: Color, width: CGFloat) -> some View {
+        let running = display == .running || display == .resting
+        let showTime = model.clock(model.remaining)
+        let fraction = display == .idle || display == .restReady ? 0 : model.progress
+        return VStack(spacing: 10) {
+            HStack(spacing: 14) {
+                Text(showTime)
+                    .font(.system(size: min(max(width * 0.16, 24), 46), weight: .light, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(theme.textC)
                     .contentTransition(.numericText(countsDown: true))
-                Text(display == .running ? "Focus" : (model.isLongBreak ? "Long break" : "Break"))
-                    .font(Typo.ui(12.5, bold: true)).foregroundStyle(tint)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                Spacer(minLength: 4)
+                if display != .idle && display != .restReady {
+                    IconButton(symbol: "xmark", help: "Cancel", size: 11, box: 28) { model.reset() }
+                }
+                Button { model.toggle() } label: {
+                    Image(systemName: running ? "pause.fill" : "play.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(theme.isDark ? Color.black.opacity(0.85) : Color.white)
+                        .frame(width: 40, height: 40)
+                        .background(Circle().fill(tint))
+                        .contentShape(Circle())
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .buttonStyle(PressStyle())
             }
-            .transition(.opacity.combined(with: .scale(scale: 0.9)))
-        case .paused:
-            HStack(spacing: 12) {
-                Image(systemName: "pause.fill").font(.system(size: 16, weight: .semibold)).foregroundStyle(tint)
-                Text(model.clock(model.remaining))
-                    .font(Typo.ui(side * 0.16, bold: true))
-                    .monospacedDigit()
-                    .foregroundStyle(theme.textC)
-                    .contentTransition(.numericText(countsDown: true))
-            }
-            .transition(.opacity.combined(with: .scale(scale: 0.9)))
-        case .restReady:
-            HStack(spacing: 10) {
-                Image(systemName: "leaf.fill").font(.system(size: 16, weight: .semibold)).foregroundStyle(tint)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(model.isLongBreak ? "Long break" : "Break").font(Typo.ui(14, bold: true)).foregroundStyle(theme.textC)
-                    Text("\(model.total / 60) min").font(Typo.ui(11.5)).foregroundStyle(theme.mutedC)
+            GeometryReader { g in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(theme.hairlineStrong.opacity(0.7))
+                    Capsule().fill(tint).frame(width: g.size.width * (1 - fraction))
+                        .animation(.linear(duration: 0.3), value: fraction)
                 }
             }
-            .transition(.opacity.combined(with: .scale(scale: 0.9)))
-        case .done:
-            VStack(spacing: 6) {
-                Image(systemName: "checkmark")
-                    .font(.system(size: side * 0.22, weight: .bold))
-                    .foregroundStyle(tint)
-                    .symbolEffect(.bounce, value: model.interactionTick)
-                Text("Done").font(Typo.ui(13, bold: true)).foregroundStyle(theme.textC)
-            }
-            .transition(.opacity.combined(with: .scale(scale: 0.8)))
+            .frame(height: 4)
         }
+        .padding(.horizontal, 20)
     }
 
-    private func ripples(tint: Color, side: CGFloat) -> some View {
-        PhaseAnimator([0.0, 1.0]) { phase in
-            ZStack {
-                ForEach(0..<3, id: \.self) { i in
-                    Circle()
-                        .strokeBorder(tint.opacity(0.5 - Double(i) * 0.14), lineWidth: 2)
-                        .frame(width: side * (1.05 + CGFloat(i) * 0.22) * (0.9 + 0.35 * phase),
-                               height: side * (1.05 + CGFloat(i) * 0.22) * (0.9 + 0.35 * phase))
-                        .opacity(1 - phase * 0.85)
-                }
-            }
-        } animation: { _ in .easeOut(duration: 1.3) }
-        .allowsHitTesting(false)
-    }
+    // MARK: pieces
 
-    // MARK: controls
-
-    private func controls(model: TimerModel, display: TimerModel.Display, tint: Color) -> some View {
-        HStack(spacing: 10) {
-            IconButton(symbol: "arrow.counterclockwise", help: "Reset", size: 13, box: 34) { model.reset() }
-
-            if display == .idle || display == .restReady {
-                IconButton(symbol: "minus", help: "Shorter", size: 12, box: 30) { model.adjust(by: -5) }
-            }
-
-            Button { model.toggle() } label: {
-                Image(systemName: (display == .running || display == .resting) ? "pause.fill" : "play.fill")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(theme.isDark ? Color.black.opacity(0.85) : Color.white)
-                    .frame(width: 54, height: 40)
-                    .background(Capsule().fill(tint))
+    @ViewBuilder
+    private func phaseTabs(_ model: TimerModel, _ display: TimerModel.Display, _ tint: Color) -> some View {
+        let canPick = display == .idle || display == .restReady
+        HStack(spacing: 4) {
+            ForEach([TimerModel.Phase.focus, .rest], id: \.self) { p in
+                let on = model.phase == p
+                let minutes = p == .focus ? panel.settings.focusMinutes : panel.settings.breakMinutes
+                Button { model.selectPhase(p) } label: {
+                    HStack(spacing: 6) {
+                        Text(p == .focus ? "Focus" : "Break").font(.system(size: 12.5, weight: on ? .semibold : .regular))
+                        Text("\(minutes)m").font(.system(size: 11.5, design: .rounded)).monospacedDigit()
+                            .foregroundStyle(on ? tint : theme.faintC)
+                    }
+                    .foregroundStyle(on ? theme.textC : theme.mutedC)
+                    .padding(.horizontal, 12)
+                    .frame(height: 28)
+                    .background(Capsule().fill(on ? tint.opacity(0.16) : .clear))
                     .contentShape(Capsule())
-                    .contentTransition(.symbolEffect(.replace))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canPick)
+                .opacity(canPick || on ? 1 : 0.35)
+            }
+        }
+        .padding(3)
+        .background(Capsule().fill(theme.hover))
+        .animation(Motion.quick, value: model.phase)
+    }
+
+    @ViewBuilder
+    private func pickerOrExtend(_ model: TimerModel, _ display: TimerModel.Display, _ tint: Color) -> some View {
+        switch display {
+        case .idle, .restReady:
+            let options = model.phase == .focus ? [5, 10, 15, 25, 45, 60, 90] : [3, 5, 10, 15, 20]
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 5) {
+                    IconButton(symbol: "minus", help: "One minute less", size: 11, box: 28) { model.adjust(by: -1) }
+                    ForEach(options, id: \.self) { m in
+                        let on = model.chosenMinutes == m
+                        Button { model.set(minutes: m) } label: {
+                            Text("\(m)")
+                                .font(.system(size: 12.5, weight: on ? .semibold : .regular, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundStyle(on ? tint : theme.mutedC)
+                                .frame(minWidth: 26, minHeight: 28)
+                                .padding(.horizontal, 2)
+                                .background(Capsule().fill(on ? tint.opacity(0.18) : theme.hover))
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(PressStyle())
+                    }
+                    IconButton(symbol: "plus", help: "One minute more", size: 11, box: 28) { model.adjust(by: 1) }
+                }
+                Text("Drag the ring, scroll over it, or tap the number to type")
+                    .font(.system(size: 11)).foregroundStyle(theme.faintC)
+            }
+            .transition(.opacity)
+        default:
+            HStack(spacing: 6) {
+                extendChip("+1 min", 1, model)
+                extendChip("+5 min", 5, model)
+                extendChip("+10 min", 10, model)
+            }
+            .transition(.opacity)
+        }
+    }
+
+    private func extendChip(_ label: String, _ minutes: Int, _ model: TimerModel) -> some View {
+        Button { model.extend(minutes: minutes) } label: {
+            Text(label)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(theme.mutedC)
+                .padding(.horizontal, 12)
+                .frame(height: 28)
+                .background(Capsule().fill(theme.hover))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(PressStyle())
+    }
+
+    private func actions(_ model: TimerModel, _ display: TimerModel.Display, _ tint: Color, fill: Bool) -> some View {
+        let running = display == .running || display == .resting
+        let label = running ? "Pause" : (display == .paused ? "Resume" : "Start")
+        let symbol = running ? "pause.fill" : "play.fill"
+        let canCancel = display != .idle && display != .restReady
+
+        return HStack(spacing: 10) {
+            Button { model.toggle() } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: symbol).font(.system(size: 12, weight: .semibold))
+                        .contentTransition(.symbolEffect(.replace))
+                    Text(label).font(.system(size: 14, weight: .semibold))
+                }
+                .foregroundStyle(theme.isDark ? Color.black.opacity(0.85) : Color.white)
+                .frame(maxWidth: fill ? .infinity : 150)
+                .frame(height: 40)
+                .background(Capsule().fill(tint))
+                .contentShape(Capsule())
             }
             .buttonStyle(PressStyle())
+            .disabled(display == .done)
 
-            if display == .idle || display == .restReady {
-                IconButton(symbol: "plus", help: "Longer", size: 12, box: 30) { model.adjust(by: 5) }
+            if canCancel {
+                Button { model.reset() } label: {
+                    Text("Cancel")
+                        .font(.system(size: 13.5, weight: .medium))
+                        .foregroundStyle(theme.mutedC)
+                        .padding(.horizontal, 16)
+                        .frame(height: 40)
+                        .background(Capsule().fill(theme.hover))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(PressStyle())
+                .transition(.scale(scale: 0.9).combined(with: .opacity))
+            }
+        }
+        .frame(maxWidth: fill ? 360 : .infinity, alignment: .leading)
+        .animation(Motion.quick, value: canCancel)
+    }
+
+    private func sessionDots(_ model: TimerModel, _ tint: Color) -> some View {
+        let n = max(panel.settings.sessionsBeforeLong, 1)
+        let done = model.sessions % n
+        let cycle = model.sessions > 0 && done == 0
+        return HStack(spacing: 6) {
+            ForEach(0..<n, id: \.self) { i in
+                Circle().fill((cycle || i < done) ? tint : theme.hairlineStrong).frame(width: 6, height: 6)
+            }
+            if model.sessions > 0 {
+                Text("\(model.sessions) done").font(.system(size: 11)).foregroundStyle(theme.faintC).padding(.leading, 4)
+            }
+        }
+        .animation(.spring(response: 0.45, dampingFraction: 0.8), value: model.sessions)
+        .frame(height: 10)
+    }
+}
+
+// MARK: - Ring with a draggable dial
+
+struct TimerRing: View {
+    @Bindable var panel: Panel
+    let model: TimerModel
+    let display: TimerModel.Display
+    let tint: Color
+    let size: CGFloat
+    @Environment(\.theme) private var theme
+
+    @State private var editing = false
+    @State private var draft = ""
+    @State private var hovering = false
+    @State private var scrollBox = ScrollBox()
+    @FocusState private var fieldFocused: Bool
+
+    private var lineWidth: CGFloat { max(size * 0.04, 6) }
+    private var radius: CGFloat { (size - lineWidth) / 2 }
+    private var isPicking: Bool { display == .idle || display == .restReady }
+
+    var body: some View {
+        let minutes = model.chosenMinutes
+        let dial = min(Double(minutes), 60) / 60
+        let remainingFraction = display == .done ? 1 : max(1 - model.progress, 0.002)
+        let arc = isPicking ? dial : remainingFraction
+
+        ZStack {
+            Circle().stroke(theme.hairlineStrong.opacity(0.55), lineWidth: lineWidth).padding(lineWidth / 2)
+
+            Circle()
+                .trim(from: 0, to: arc)
+                .stroke(AngularGradient(colors: [tint.opacity(0.55), tint], center: .center,
+                                        startAngle: .degrees(0), endAngle: .degrees(360 * max(arc, 0.01))),
+                        style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .padding(lineWidth / 2)
+                .rotationEffect(.degrees(-90))
+                .animation(isPicking ? .snappy(duration: 0.18) : .linear(duration: 0.3), value: arc)
+
+            if isPicking {
+                // the dial knob
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: lineWidth * 2.1, height: lineWidth * 2.1)
+                    .shadow(color: .black.opacity(0.3), radius: 3, y: 1)
+                    .offset(x: radius * sin(arc * 2 * .pi), y: -radius * cos(arc * 2 * .pi))
+                    .animation(.snappy(duration: 0.18), value: arc)
             }
 
-            IconButton(symbol: "forward.end", help: "Skip", size: 13, box: 34) { model.skip() }
+            center(minutes: minutes)
+                .padding(.horizontal, lineWidth * 2)
         }
+        .frame(width: size, height: size)
+        .contentShape(Circle())
+        .gesture(isPicking ? dialGesture : nil)
+        .onHover { hovering = $0 }
+        .onAppear { installScroll() }
+        .onDisappear { scrollBox.remove() }
+        .scaleEffect(display == .done ? 1.03 : 1)
         .animation(Motion.layout, value: display)
     }
 
-    private func sessionDots(model: TimerModel, tint: Color) -> some View {
-        let n = max(panel.settings.sessionsBeforeLong, 1)
-        let done = model.sessions % n
-        let cycleComplete = model.sessions > 0 && done == 0
-        return HStack(spacing: 7) {
-            ForEach(0..<n, id: \.self) { i in
-                Capsule()
-                    .fill((cycleComplete || i < done) ? tint : theme.hairlineStrong)
-                    .frame(width: (cycleComplete || i < done) ? 18 : 8, height: 5)
-            }
-            if model.sessions > 0 {
-                Text("\(model.sessions)").font(Typo.ui(11)).foregroundStyle(theme.faintC).padding(.leading, 4)
+    // MARK: centre
+
+    @ViewBuilder
+    private func center(minutes: Int) -> some View {
+        VStack(spacing: size * 0.02) {
+            if isPicking {
+                if editing {
+                    TextField("", text: $draft)
+                        .textFieldStyle(.plain)
+                        .multilineTextAlignment(.center)
+                        .font(.system(size: size * 0.26, weight: .light, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(theme.textC)
+                        .focused($fieldFocused)
+                        .onSubmit { commit() }
+                        .onExitCommand { editing = false }
+                        .frame(maxWidth: size * 0.6)
+                } else {
+                    Text("\(minutes)")
+                        .font(.system(size: size * 0.26, weight: .light, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(theme.textC)
+                        .contentTransition(.numericText())
+                        .animation(.snappy(duration: 0.16), value: minutes)
+                        .onTapGesture {
+                            draft = "\(minutes)"
+                            editing = true
+                            DispatchQueue.main.async { fieldFocused = true }
+                        }
+                }
+                Text(minutes == 1 ? "minute" : "minutes")
+                    .font(.system(size: max(size * 0.058, 11.5), weight: .medium))
+                    .foregroundStyle(tint)
+            } else {
+                Text(model.clock(display == .done ? 0 : model.remaining))
+                    .font(.system(size: size * 0.22, weight: .light, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(theme.textC)
+                    .contentTransition(.numericText(countsDown: true))
+                    .minimumScaleFactor(0.6)
+                    .lineLimit(1)
+                subtitle
             }
         }
-        .animation(.spring(response: 0.5, dampingFraction: 0.75), value: model.sessions)
-        .frame(height: 12)
+    }
+
+    @ViewBuilder
+    private var subtitle: some View {
+        let font = Font.system(size: max(size * 0.056, 11.5), weight: .medium)
+        switch display {
+        case .running, .resting:
+            if let end = model.endsAt {
+                HStack(spacing: 5) {
+                    Image(systemName: "bell.fill").font(.system(size: max(size * 0.044, 9)))
+                    Text(end.formatted(.dateTime.hour().minute()))
+                }
+                .font(font).foregroundStyle(theme.mutedC)
+            }
+        case .paused: Text("Paused").font(font).foregroundStyle(theme.mutedC)
+        case .done: Text("Done").font(font).foregroundStyle(tint)
+        default: EmptyView()
+        }
+    }
+
+    private func commit() {
+        editing = false
+        let digits = draft.split(separator: ":").first.map(String.init) ?? draft
+        if let m = Int(digits.trimmingCharacters(in: .whitespaces)), m > 0 { model.set(minutes: m) }
+    }
+
+    // MARK: dial
+
+    private var dialGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { v in
+                let c = CGPoint(x: size / 2, y: size / 2)
+                let startDistance = hypot(v.startLocation.x - c.x, v.startLocation.y - c.y)
+                guard startDistance > radius - lineWidth * 3.2, startDistance < radius + lineWidth * 3 else { return }
+                let dx = v.location.x - c.x, dy = v.location.y - c.y
+                var angle = atan2(dx, -dy)                 // 0 at the top, clockwise
+                if angle < 0 { angle += 2 * .pi }
+                var m = Int((angle / (2 * .pi) * 60).rounded())
+                let previous = model.chosenMinutes
+                if m == 0 { m = previous > 30 ? 60 : 1 }
+                if m % 5 != 0, abs(m - Int((Double(m) / 5).rounded()) * 5) <= 1 { m = Int((Double(m) / 5).rounded()) * 5 }
+                m = min(max(m, 1), 60)
+                if m != previous { model.set(minutes: m) }
+            }
+    }
+
+    // MARK: scroll wheel
+
+    final class ScrollBox {
+        var monitor: Any?
+        var accum: CGFloat = 0
+        func remove() { if let m = monitor { NSEvent.removeMonitor(m); monitor = nil } }
+    }
+
+    private func installScroll() {
+        scrollBox.remove()
+        let box = scrollBox
+        scrollBox.monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [model] event in
+            guard hovering, isPicking else { return event }
+            box.accum += event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / 9 : event.scrollingDeltaY
+            let steps = Int(box.accum)
+            if steps != 0 {
+                box.accum -= CGFloat(steps)
+                model.adjust(by: steps * (event.modifierFlags.contains(.shift) ? 5 : 1))
+            }
+            return nil
+        }
     }
 }

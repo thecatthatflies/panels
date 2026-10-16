@@ -66,6 +66,9 @@ struct PanelsCommands: Commands {
                 else if let f = ws.focused { ws.close(f.id) }
             }
             .keyboardShortcut("w", modifiers: .command)
+            Button(ws.reopenLabel) { ws.reopenLast() }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .disabled(ws.closedStack.isEmpty)
             Button("Close Workspace") { ws.closeSpace(ws.activeSpaceID) }
                 .keyboardShortcut("w", modifiers: [.command, .shift])
                 .disabled(ws.spaces.count < 2)
@@ -218,9 +221,6 @@ struct PanelsCommands: Commands {
                     Button { ws.newSpace(from: t) } label: { Label(t.name, systemImage: t.symbol) }
                 }
             }
-            Button("Reopen Closed Workspace") { ws.reopenClosedSpace() }
-                .keyboardShortcut("t", modifiers: [.command, .shift])
-                .disabled(ws.closedSpaces.isEmpty)
             Button("Duplicate Workspace") { ws.duplicateSpace(ws.activeSpaceID) }
             Button("Rename Workspace...") {
                 if let name = Prompt.text(title: "Rename Workspace", message: "Choose a new name.",

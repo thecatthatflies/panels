@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Persistence.startAutosave()
         Updater.shared.start()
         DispatchQueue.main.async { PopoutManager.shared.restoreAll() }
+        SelfTest.runIfRequested()
         Appearance.shared.refreshSystem()
         appearanceObserver = NSApp.observe(\.effectiveAppearance, options: [.new]) { _, _ in
             DispatchQueue.main.async { Appearance.shared.refreshSystem() }
