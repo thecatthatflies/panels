@@ -44,6 +44,12 @@ struct PanelsCommands: Commands {
             Button("Save Note as Markdown...") { if let p = ws.focused, p.kind == .note { FileOps.saveMarkdown(p) } }
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(focusedKind != .note)
+            Menu("Export Note") {
+                Button("HTML...") { if let p = ws.focused, p.kind == .note { ExportOps.saveHTML(p) } }
+                Button("PDF...") { if let p = ws.focused, p.kind == .note { ExportOps.savePDF(p) } }
+                Button("Copy as HTML") { if let p = ws.focused, p.kind == .note { ExportOps.copyHTML(p) } }
+            }
+            .disabled(focusedKind != .note)
             Divider()
             Button("Close Panel") { if let f = ws.focused { ws.close(f.id) } }
                 .keyboardShortcut("w", modifiers: .command)
@@ -52,6 +58,32 @@ struct PanelsCommands: Commands {
                 .disabled(ws.spaces.count < 2)
             Divider()
             Button("Show Data in Finder") { FileOps.revealDataFolder() }
+        }
+
+        // MARK: Edit
+        CommandGroup(after: .textEditing) {
+            Menu("Find") {
+                Button("Find...") { FindOps.perform(1) }
+                    .keyboardShortcut("f", modifiers: .command)
+                Button("Find and Replace...") { FindOps.perform(12) }
+                    .keyboardShortcut("f", modifiers: [.command, .option])
+                Button("Find Next") { FindOps.perform(2) }
+                    .keyboardShortcut("g", modifiers: .command)
+                Button("Find Previous") { FindOps.perform(3) }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+                Button("Use Selection for Find") { FindOps.perform(7) }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+            }
+            Menu("Go to Heading") {
+                if let p = ws.focused, p.kind == .note {
+                    ForEach(Outline.items(in: p.text).prefix(40)) { item in
+                        Button(String(repeating: "\u{2003}", count: max(item.level - 1, 0)) + item.title) {
+                            Runtime.shared.noteHost(for: p).jump(to: item.location)
+                        }
+                    }
+                }
+            }
+            .disabled(focusedKind != .note)
         }
 
         // MARK: View

@@ -46,6 +46,7 @@ struct SettingsView: View {
             Group {
                 switch r.tab {
                 case .general: GeneralSettings()
+                case .writing: WritingSettings()
                 case .sites: SitesSettings()
                 case .updates: ScrollView { UpdateSettingsSection().padding(26) }
                 case .shortcuts: ShortcutsSettings()
@@ -233,7 +234,8 @@ struct ShortcutsSettings: View {
         ]),
         ("Writing", [
             ("Lock in", "Cmd Shift L"), ("Bold", "Cmd B"), ("Italic", "Cmd I"), ("Inline code", "Cmd E"),
-            ("Link", "Cmd Shift K"), ("Bigger, smaller, actual size", "Cmd + and Cmd - and Cmd 0"), ("Save as markdown", "Cmd S")
+            ("Link", "Cmd Shift K"), ("Open wiki link", "Cmd click"), ("Find", "Cmd F"), ("Find and replace", "Cmd Option F"),
+            ("Find next or previous", "Cmd G and Cmd Shift G"), ("Bigger, smaller, actual size", "Cmd + and Cmd - and Cmd 0"), ("Save as markdown", "Cmd S")
         ]),
         ("Web", [
             ("Go to address", "Cmd L"), ("Reload", "Cmd R"), ("Back and forward", "Ctrl Option Cmd [ and ]")

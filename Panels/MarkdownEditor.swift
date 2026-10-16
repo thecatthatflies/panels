@@ -14,6 +14,7 @@ struct EditorStyle: Equatable {
     var accent: NSColor
     var codeBackground: NSColor
     var isDark: Bool
+    var knownTitles: Set<String> = []
 }
 
 // MARK: - Markdown styler
@@ -29,6 +30,7 @@ enum MarkdownStyler {
     private static let italic = try! NSRegularExpression(pattern: "(?<![\\*_\\w])([\\*_])(?=[^\\s\\*_])(.+?)(?<=[^\\s\\*_])\\1(?![\\*_\\w])")
     private static let strike = try! NSRegularExpression(pattern: "~~(?=\\S)(.+?)(?<=\\S)~~")
     private static let link = try! NSRegularExpression(pattern: "(!?\\[)([^\\]\\n]*)(\\]\\()([^)\\n]+)(\\))")
+    private static let wiki = try! NSRegularExpression(pattern: "\\[\\[([^\\]\\n|]+)(\\|([^\\]\\n]+))?\\]\\]")
     private static let bareURL = try! NSRegularExpression(pattern: "https?://[^\\s)>\\]]+")
     private static let table = try! NSRegularExpression(pattern: "^\\s*\\|.*\\|\\s*$")
 
@@ -184,6 +186,19 @@ enum MarkdownStyler {
             storage.addAttribute(.foregroundColor, value: s.faint, range: shift(NSRange(location: m.range.location, length: 2), by: offset))
             storage.addAttribute(.foregroundColor, value: s.faint, range: shift(NSRange(location: NSMaxRange(m.range) - 2, length: 2), by: offset))
         }
+        // wiki links between notes
+        for m in wiki.matches(in: line, range: sub) {
+            let whole = shift(m.range, by: offset)
+            let titleR = m.range(at: 1)
+            let target = (line as NSString).substring(with: titleR).trimmingCharacters(in: .whitespaces).lowercased()
+            let exists = s.knownTitles.contains(target)
+            let shown = m.range(at: 3).location != NSNotFound ? shift(m.range(at: 3), by: offset) : shift(titleR, by: offset)
+            let color = exists ? s.accent : s.accent.withAlphaComponent(0.55)
+            storage.addAttribute(.foregroundColor, value: s.faint, range: whole)
+            storage.addAttributes([.foregroundColor: color,
+                                   .underlineStyle: NSUnderlineStyle.single.union(.patternDot).rawValue,
+                                   .underlineColor: color.withAlphaComponent(0.7)], range: shown)
+        }
         // links
         for m in link.matches(in: line, range: sub) {
             let open = shift(m.range(at: 1), by: offset)
@@ -243,6 +258,9 @@ enum MarkdownStyler {
 
 final class PanelTextView: NSTextView {
     var onFocus: (() -> Void)?
+    var onOpenWiki: ((String) -> Void)?
+    private static let wikiClick = try! NSRegularExpression(pattern: "\\[\\[([^\\]\\n|]+)(?:\\|[^\\]\\n]+)?\\]\\]")
+    private static let snippetToken = try! NSRegularExpression(pattern: "(^|\\s);([A-Za-z0-9]+)$")
     private static let listLine = try! NSRegularExpression(pattern: "^(\\s*)([-*+]|(\\d{1,3})([.)]))(\\s+)(\\[[ xX]\\]\\s+)?")
     private static let quoteLine = try! NSRegularExpression(pattern: "^(\\s*>+\\s?)")
     private static let checkbox = try! NSRegularExpression(pattern: "\\[[ xX]\\]")
@@ -254,6 +272,40 @@ final class PanelTextView: NSTextView {
         let ok = super.becomeFirstResponder()
         if ok { onFocus?() }
         return ok
+    }
+
+    // MARK: snippets
+
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        if let typed = string as? String, typed == " ", replacementRange.location == NSNotFound, tryExpandSnippet() { return }
+        super.insertText(string, replacementRange: replacementRange)
+    }
+
+    private func tryExpandSnippet() -> Bool {
+        guard SnippetStore.shared.enabled else { return false }
+        let sel = selectedRange()
+        guard sel.length == 0 else { return false }
+        let (lineR, line) = lineInfo(at: sel.location)
+        let caretInLine = sel.location - lineR.location
+        guard caretInLine > 1, caretInLine <= (line as NSString).length else { return false }
+        let prefix = (line as NSString).substring(to: caretInLine)
+        let full = NSRange(location: 0, length: (prefix as NSString).length)
+        guard let m = Self.snippetToken.firstMatch(in: prefix, range: full) else { return false }
+        let token = (prefix as NSString).substring(with: m.range(at: 2))
+        guard let result = SnippetStore.shared.expand(token) else { return false }
+
+        let semicolonAt = lineR.location + m.range(at: 2).location - 1
+        let replaced = NSRange(location: semicolonAt, length: token.utf16.count + 1)
+        var text = result.text
+        if result.caret == nil, let last = text.unicodeScalars.last, !CharacterSet.whitespacesAndNewlines.contains(last) {
+            text += " "
+        }
+        guard shouldChangeText(in: replaced, replacementString: text) else { return false }
+        textStorage?.replaceCharacters(in: replaced, with: text)
+        didChangeText()
+        let caret = semicolonAt + (result.caret ?? (text as NSString).length)
+        setSelectedRange(NSRange(location: caret, length: 0))
+        return true
     }
 
     // MARK: current line helpers
@@ -452,6 +504,13 @@ final class PanelTextView: NSTextView {
         }
 
         if event.modifierFlags.contains(.command) {
+            for m in Self.wikiClick.matches(in: line, range: ls) {
+                let abs = NSRange(location: lineR.location + m.range.location, length: m.range.length)
+                if idx >= abs.location && idx <= NSMaxRange(abs) {
+                    onOpenWiki?((line as NSString).substring(with: m.range(at: 1)))
+                    return
+                }
+            }
             for m in Self.mdLink.matches(in: line, range: ls) {
                 let abs = NSRange(location: lineR.location + m.range.location, length: m.range.length)
                 if idx >= abs.location && idx <= NSMaxRange(abs) {
@@ -558,6 +617,7 @@ final class NoteEditorHost: NSObject, NSTextViewDelegate, NSTextStorageDelegate 
             guard let id = self?.panel?.id else { return }
             Workspace.shared.focus(id, grabFirstResponder: false)
         }
+        textView.onOpenWiki = { title in Workspace.shared.openNote(titled: title) }
     }
 
     func apply(settings st: PanelSettings, theme: Theme) {
@@ -572,7 +632,8 @@ final class NoteEditorHost: NSObject, NSTextViewDelegate, NSTextStorageDelegate 
             faint: NSColor(hex: theme.textFaint),
             accent: accent,
             codeBackground: theme.isDark ? NSColor.white.withAlphaComponent(0.06) : NSColor.black.withAlphaComponent(0.055),
-            isDark: theme.isDark
+            isDark: theme.isDark,
+            knownTitles: Workspace.shared.knownNoteTitles()
         )
 
         let modeChanged = typewriter != st.typewriter || dimOthers != st.dimParagraphs
@@ -700,6 +761,51 @@ final class NoteEditorHost: NSObject, NSTextViewDelegate, NSTextStorageDelegate 
         guard !applying, let panel else { return }
         let s = textView.string
         if panel.text != s { panel.text = s }
+        updateAutoTitle()
+    }
+
+    /// Notes with an H1 take it as their panel title until the user renames the panel by hand.
+    private func updateAutoTitle() {
+        guard let panel, panel.kind == .note, panel.settings.autoTitle,
+              let heading = Outline.firstHeading(in: panel.text) else { return }
+        let clipped = heading.count > 60 ? String(heading.prefix(60)) : heading
+        if panel.title != clipped { panel.title = clipped }
+    }
+
+    // MARK: navigation
+
+    func jump(to location: Int) {
+        let ns = textView.string as NSString
+        let loc = min(max(location, 0), ns.length)
+        textView.window?.makeFirstResponder(textView)
+        textView.setSelectedRange(NSRange(location: loc, length: 0))
+        if let lm = textView.layoutManager, ns.length > 0 {
+            let glyph = lm.glyphIndexForCharacter(at: min(loc, ns.length - 1))
+            var rect = lm.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            rect.origin.y += textView.textContainerOrigin.y
+            let clip = scrollView.contentView
+            let maxY = max(textView.frame.height - clip.bounds.height + scrollView.contentInsets.bottom, 0)
+            let target = min(max(rect.minY - clip.bounds.height * 0.18, 0), maxY)
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.28
+                ctx.allowsImplicitAnimation = true
+                clip.animator().setBoundsOrigin(NSPoint(x: 0, y: target))
+            }
+            scrollView.reflectScrolledClipView(clip)
+        }
+        flash(range: ns.lineRange(for: NSRange(location: loc, length: 0)))
+    }
+
+    /// Briefly tints a line (or the first line when nil) so a jump is easy to follow.
+    func flash(range: NSRange?) {
+        guard let lm = textView.layoutManager, let style = lastStyle else { return }
+        let ns = textView.string as NSString
+        guard ns.length > 0 else { return }
+        let r = range ?? ns.lineRange(for: NSRange(location: 0, length: 0))
+        lm.addTemporaryAttribute(.backgroundColor, value: style.accent.withAlphaComponent(0.30), forCharacterRange: r)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak lm] in
+            lm?.removeTemporaryAttribute(.backgroundColor, forCharacterRange: r)
+        }
     }
 }
 

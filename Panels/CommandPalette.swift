@@ -67,10 +67,34 @@ struct CommandPalette: View {
                                    symbol: "plus.square.on.square", keywords: "copy clone", shortcut: nil) { ws.duplicate(f.id) })
             out.append(PaletteItem(id: "close", title: "Close Panel", subtitle: f.title,
                                    symbol: "xmark", keywords: "remove delete", shortcut: "Cmd W") { ws.close(f.id) })
+            if f.kind == .note {
+                for item in Outline.items(in: f.text).prefix(40) {
+                    out.append(PaletteItem(id: "heading-\(item.id)", title: "Go to: \(item.title)", subtitle: "Heading in \(f.title)",
+                                           symbol: "number", keywords: "outline jump section heading", shortcut: nil) {
+                        Runtime.shared.noteHost(for: f).jump(to: item.location)
+                    })
+                }
+                out.append(PaletteItem(id: "export-html", title: "Export as HTML...", subtitle: f.title,
+                                       symbol: "chevron.left.forwardslash.chevron.right", keywords: "save web page", shortcut: nil) { ExportOps.saveHTML(f) })
+                out.append(PaletteItem(id: "export-pdf", title: "Export as PDF...", subtitle: f.title,
+                                       symbol: "doc.richtext", keywords: "save print document", shortcut: nil) { ExportOps.savePDF(f) })
+                out.append(PaletteItem(id: "copy-html", title: "Copy as HTML", subtitle: f.title,
+                                       symbol: "doc.on.clipboard", keywords: "clipboard rich", shortcut: nil) { ExportOps.copyHTML(f) })
+                out.append(PaletteItem(id: "save-md", title: "Save as Markdown...", subtitle: f.title,
+                                       symbol: "square.and.arrow.down", keywords: "export file md", shortcut: "Cmd S") { FileOps.saveMarkdown(f) })
+            }
             for mode in NoteMode.allCases where f.kind == .note {
                 out.append(PaletteItem(id: "mode-\(mode.rawValue)", title: "Note view: \(mode.label)", subtitle: f.title,
                                        symbol: mode.symbol, keywords: "markdown preview edit split", shortcut: nil) {
                     f.settings.noteMode = mode
+                })
+            }
+        }
+        for sp in ws.spaces {
+            for np in sp.panels where np.kind == .note && np.id != ws.focused?.id {
+                out.append(PaletteItem(id: "note-\(np.id)", title: "Go to note: \(np.title)", subtitle: sp.name,
+                                       symbol: "text.alignleft", keywords: "open find switch note", shortcut: nil) {
+                    ws.openNote(titled: np.title)
                 })
             }
         }

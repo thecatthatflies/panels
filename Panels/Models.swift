@@ -783,6 +783,8 @@ final class Workspace {
     static func makeWelcomeSpace() -> Space {
         let welcome = Panel(kind: .note, title: "Welcome", text: welcomeText)
         let scratch = Panel(kind: .note, title: "Scratch", text: scratchText)
+        welcome.settings.autoTitle = false
+        scratch.settings.autoTitle = false
         scratch.settings.accent = .lavender
         scratch.settings.font = .serif
         scratch.settings.fontSize = 16

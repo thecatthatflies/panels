@@ -176,6 +176,13 @@ struct MarkdownPreview: View {
             .padding(CGFloat(settings.padding))
         }
         .scrollIndicators(.automatic)
+        .environment(\.openURL, OpenURLAction { url in
+            if url.scheme == "panels-note" {
+                Workspace.shared.openNote(titled: url.path.removingPercentEncoding?.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? "")
+                return .handled
+            }
+            return .systemAction
+        })
     }
 
     // MARK: inline
@@ -191,7 +198,27 @@ struct MarkdownPreview: View {
         return Font(f as CTFont)
     }
 
-    private func inline(_ s: String, size: CGFloat, bold: Bool = false, color: Color? = nil) -> Text {
+    /// Turns [[Note]] and [[Note|alias]] into links the preview can intercept.
+    private static func wikiToLinks(_ s: String) -> String {
+        guard s.contains("[[") else { return s }
+        guard let re = try? NSRegularExpression(pattern: "\\[\\[([^\\]\\n|]+)(?:\\|([^\\]\\n]+))?\\]\\]") else { return s }
+        let ns = s as NSString
+        var out = ""
+        var last = 0
+        for m in re.matches(in: s, range: NSRange(location: 0, length: ns.length)) {
+            out += ns.substring(with: NSRange(location: last, length: m.range.location - last))
+            let title = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
+            let shown = m.range(at: 2).location != NSNotFound ? ns.substring(with: m.range(at: 2)) : title
+            let enc = title.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? title
+            out += "[\(shown)](panels-note:///\(enc))"
+            last = NSMaxRange(m.range)
+        }
+        out += ns.substring(from: last)
+        return out
+    }
+
+    private func inline(_ source: String, size: CGFloat, bold: Bool = false, color: Color? = nil) -> Text {
+        let s = Self.wikiToLinks(source)
         var attr = (try? AttributedString(markdown: s, options: AttributedString.MarkdownParsingOptions(
             allowsExtendedAttributes: true,
             interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)

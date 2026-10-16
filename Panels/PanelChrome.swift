@@ -126,7 +126,10 @@ struct PanelView: View {
                     .font(Typo.ui(12.5, bold: true))
                     .foregroundStyle(theme.textC)
                     .focused($titleFocused)
-                    .onSubmit { renaming = false }
+                    .onSubmit {
+                        renaming = false
+                        if panel.kind == .note { panel.settings.autoTitle = false }
+                    }
                     .onExitCommand { renaming = false }
                     .frame(maxWidth: 220)
             } else {
@@ -140,6 +143,8 @@ struct PanelView: View {
             Spacer(minLength: 8)
 
             if panel.kind == .note && !locked && (showActions || isFocused) {
+                OutlineMenu(panel: panel)
+                    .transition(.opacity)
                 NoteModePicker(panel: panel, accent: accent)
                     .transition(.opacity)
             }
@@ -357,6 +362,9 @@ struct PanelSettingsView: View {
                                label: { $0.label }, tint: accent)
             }
             ToggleRow(label: "Style markdown as you type", isOn: $panel.settings.richStyling, tint: accent)
+            ToggleRow(label: "Title from first heading", isOn: $panel.settings.autoTitle, tint: accent)
+            ToggleRow(label: "Typewriter scrolling", isOn: $panel.settings.typewriter, tint: accent)
+            ToggleRow(label: "Dim other paragraphs", isOn: $panel.settings.dimParagraphs, tint: accent)
             ToggleRow(label: "Wrap long lines", isOn: $panel.settings.wrap, tint: accent)
             ToggleRow(label: "Check spelling", isOn: $panel.settings.spellcheck, tint: accent)
             ToggleRow(label: "Show word count", isOn: $panel.settings.showStats, tint: accent)
@@ -475,5 +483,27 @@ struct PanelSettingsView: View {
         }
         shared = panel.settings
         ws.showToast("Applied to matching panels")
+    }
+}
+
+
+// MARK: - Outline menu
+
+struct OutlineMenu: View {
+    @Bindable var panel: Panel
+
+    var body: some View {
+        let items = Outline.items(in: panel.text)
+        if !items.isEmpty {
+            IconMenu(symbol: "list.bullet.indent", help: "Outline") {
+                ForEach(items.prefix(60)) { item in
+                    Button {
+                        Runtime.shared.noteHost(for: panel).jump(to: item.location)
+                    } label: {
+                        Text(String(repeating: "\u{2003}", count: max(item.level - 1, 0)) + item.title)
+                    }
+                }
+            }
+        }
     }
 }
