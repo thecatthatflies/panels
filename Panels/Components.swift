@@ -58,18 +58,24 @@ struct WindowDragRegion: NSViewRepresentable {
 
 // MARK: - Window configuration
 
-struct WindowConfigurator: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let v = NSView()
-        DispatchQueue.main.async { configure(v.window) }
-        return v
+/// Configures the window the moment the view joins it, before the window is first drawn. Doing it a tick later
+/// let the window appear at its default frame and style, then jump to the saved frame (a visible flash, and
+/// Stage Manager showed it as a stray thumbnail).
+final class WindowConfigView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        WindowConfigurator.configure(window)
     }
+}
+
+struct WindowConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { WindowConfigView() }
 
     func updateNSView(_ v: NSView, context: Context) {
-        DispatchQueue.main.async { configure(v.window) }
+        DispatchQueue.main.async { Self.configure(v.window) }
     }
 
-    private func configure(_ window: NSWindow?) {
+    static func configure(_ window: NSWindow?) {
         guard let w = window else { return }
         w.titleVisibility = .hidden
         w.titlebarAppearsTransparent = true
@@ -80,6 +86,7 @@ struct WindowConfigurator: NSViewRepresentable {
         w.isMovableByWindowBackground = false
         w.minSize = NSSize(width: 760, height: 500)
         w.collectionBehavior.insert(.fullScreenPrimary)
+        if TestMode.active { w.alphaValue = 0; w.ignoresMouseEvents = true }
         WindowChrome.mainWindow = w
         WindowChrome.restoreFrameOnce(w)
         WindowChrome.install(on: w)

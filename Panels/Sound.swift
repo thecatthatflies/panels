@@ -127,13 +127,13 @@ final class SoundSettings {
 
     var prefs: SoundPrefs {
         didSet {
-            if let data = try? JSONEncoder().encode(prefs) { UserDefaults.standard.set(data, forKey: "soundPrefs") }
+            if !TestMode.active, let data = try? JSONEncoder().encode(prefs) { UserDefaults.standard.set(data, forKey: "soundPrefs") }
             SoundEngine.shared.prefsChanged(old: oldValue, new: prefs)
         }
     }
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: "soundPrefs"),
+        if !TestMode.active, let data = UserDefaults.standard.data(forKey: "soundPrefs"),
            let decoded = try? JSONDecoder().decode(SoundPrefs.self, from: data) {
             prefs = decoded
         } else {
@@ -667,7 +667,7 @@ final class SoundEngine {
     }
 
     private func ensureRunning() {
-        guard shouldRun else { return }
+        guard shouldRun, !TestMode.active else { return }
         buildGraphIfNeeded()
         stopWork?.cancel()
         if !engine.isRunning {
@@ -732,7 +732,7 @@ final class SoundEngine {
 
     func play(_ cue: SoundCue) {
         let p = prefs
-        guard p.masterEnabled, p.uiEnabled, !appIsQuiet else { return }
+        guard !TestMode.active, p.masterEnabled, p.uiEnabled, !appIsQuiet else { return }
         ensureRunning()
         applyAmbientTargetsIfNeeded()
         guard let buf = uiBuffer(for: cue) else { return }
@@ -746,7 +746,7 @@ final class SoundEngine {
 
     func type(_ kind: TypingKind) {
         let p = prefs
-        guard p.masterEnabled, p.typingEnabled, !appIsQuiet else { return }
+        guard !TestMode.active, p.masterEnabled, p.typingEnabled, !appIsQuiet else { return }
         let now = CFAbsoluteTimeGetCurrent()
         if now - lastTypeTime < 0.012 { return }
         lastTypeTime = now

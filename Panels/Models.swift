@@ -812,6 +812,7 @@ final class Workspace {
 
     func apply(_ preset: LayoutPreset) {
         let s = space
+        let oldTiling = s.tiling
         s.tiling = nil
         var pool = s.panels
         func build(_ shape: Shape) -> Node {
@@ -828,9 +829,15 @@ final class Workspace {
             let extras = pool.map { Node(panel: $0) }
             root = Node(axis: .horizontal, children: [root] + extras)
         }
+        let oldRoot = s.root, oldZoom = s.zoomedID
+        root.normalize()
+        s.root = root
+        if !fits(s) {
+            s.root = oldRoot; s.tiling = oldTiling; s.zoomedID = oldZoom
+            showNoRoom()
+            return
+        }
         withAnimation(Motion.layout) {
-            root.normalize()
-            s.root = root
             s.zoomedID = nil
         }
         if s.focusedID == nil || s.panels.first(where: { $0.id == s.focusedID }) == nil {

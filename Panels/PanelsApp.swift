@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var appearanceObserver: NSKeyValueObservation?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if TestMode.active { NSApp.setActivationPolicy(.accessory) }   // no Dock icon, no focus steal, no Stage Manager entry
         Persistence.startAutosave()
         Updater.shared.start()
         DispatchQueue.main.async { PopoutManager.shared.restoreAll() }

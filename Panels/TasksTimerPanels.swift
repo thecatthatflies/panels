@@ -353,7 +353,7 @@ final class TimerModel {
         remaining = 0
         if genuine {
             if SoundSettings.shared.prefs.masterEnabled { Sound.play(.timerEnd) }
-            else if settings.timerSound { NSSound(named: "Glass")?.play() }
+            else if settings.timerSound, !TestMode.active { NSSound(named: "Glass")?.play() }
         }
         let wasFocus = phase == .focus
         if wasFocus { sessions += 1 }

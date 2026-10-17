@@ -37,7 +37,7 @@ final class LoopbackServer {
 }
 
 enum SelfTest {
-    static var enabled: Bool { ProcessInfo.processInfo.environment["PANELS_SELFTEST"] == "1" }
+    static var enabled: Bool { TestMode.active && ProcessInfo.processInfo.environment["PANELS_SELFTEST"] == "1" }
 
     private static var lines: [String] = []
     private static var failures = 0
@@ -657,6 +657,15 @@ enum SelfTest {
         let cellW = (area.width - 8 * CGFloat(cols - 1)) / CGFloat(cols)
         let cellH = (area.height - 8 * CGFloat(rows.count - 1)) / CGFloat(rows.count)
         check("balanced grid keeps cells above the minimum when it can", cellW >= 280 && cellH >= 200, "\(rows) \(cellW)x\(cellH)")
+        // presets that cannot fit are refused and leave the layout alone
+        ws.newSpace()
+        ws.maxContentOverride = CGSize(width: 1400, height: 900)
+        ws.addPanel(.note)
+        let beforeIDs = ws.space.panels.map(\.id)
+        ws.maxContentOverride = CGSize(width: 700, height: 500)
+        ws.apply(.quad)
+        check("a preset that cannot fit is refused and nothing changes", ws.space.panels.map(\.id) == beforeIDs && treeOK(ws) && ws.space.tiling == .balanced)
+        ws.maxContentOverride = nil
         ws.maxContentOverride = nil
     }
 

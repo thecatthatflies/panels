@@ -30,7 +30,7 @@ final class TerminalController {
         shellPath = panel.settings.shell
 
         emulator.onResponse = { [weak self] bytes in self?.write(bytes) }
-        emulator.onBell = { NSSound.beep() }
+        emulator.onBell = { if !TestMode.active { NSSound.beep() } }
         emulator.onScrollbackTrim = { [weak self] n in self?.view.scrollbackTrimmed(n) }
     }
 

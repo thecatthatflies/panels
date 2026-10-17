@@ -17,7 +17,7 @@ open build/Build/Products/Debug/Panels.app
 xcodebuild -project Panels.xcodeproj -scheme Panels -configuration Release -derivedDataPath build MARKETING_VERSION=1.0.0 build
 
 # headless self test: 189 checks, prints PASS or FAIL lines, exits. Always use a scratch data dir.
-mkdir -p /tmp/panels-selftest-data && PANELS_SELFTEST=1 PANELS_DATA_DIR=/tmp/panels-selftest-data PANELS_TIMER_SPEED=60 \
+mkdir -p /tmp/panels-selftest-data && PANELS_SELFTEST=1 CFFIXED_USER_HOME=/tmp/panels-selftest-data PANELS_DATA_DIR=/tmp/panels-selftest-data PANELS_TIMER_SPEED=60 \
   PANELS_SELFTEST_LOG=/tmp/panels-selftest.log build/Build/Products/Debug/Panels.app/Contents/MacOS/Panels
 cat /tmp/panels-selftest.log   # last line is ALL PASSED or N FAILED
 
@@ -97,6 +97,8 @@ Other folders: `ml/` (dictation model data and eval), `ideas/` (gitignored parke
 - Debug builds are much slower than Release; judge speed on Release.
 
 ## Testing
+
+- **Test runs must never touch the owner's machine state.** `TestMode.active` (self test or snapshots) silences all sound, hides the window (alpha 0, accessory activation policy) and stops `soundPrefs` being read or written. The self test script also sets `CFFIXED_USER_HOME` so UserDefaults go to the scratch folder. A past bug: the self test ran real timers at 60x through the owner's real sound settings, so they heard timer chimes (1 or 3, pitch varying) and saw the window flash at every test run, and it overwrote their sound preferences.
 
 - Before saying anything works: build, run the headless self test, and for UI changes look at it (screenshot or snapshot sheet). Add a check to `SelfTest.swift` for every bug you fix.
 - **Never delete `~/Library/Application Support/Panels`.** Use `PANELS_DATA_DIR` for any experiment. (Past sessions wiped it repeatedly.)

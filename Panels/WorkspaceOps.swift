@@ -357,6 +357,12 @@ extension Workspace {
                     insert(panel, beside: last, axis: .horizontal, before: false, in: target)
                 }
             }
+            if !fits(target) {
+                removeWithoutUndo(panel.id, from: target)
+                closedStack.append(item)
+                showNoRoom()
+                return
+            }
             target.focusedID = panel.id
             Sound.play(.open)
             showToast("Reopened \(panel.title)")
