@@ -79,9 +79,15 @@ enum SelfTest {
         }
     }
 
+    /// A fixed screen for every check, so results never depend on the host's display. CI runners have
+    /// small screens, where adding panels is refused (hard minimums) and the old force unwraps crashed.
+    static let screen = CGSize(width: 2560, height: 1400)
+
     @MainActor
     private static func runAll() async {
         log("Panels self test, \(Date())")
+        Workspace.shared.maxContentOverride = screen
+        check("self test uses a fixed screen size", Workspace.shared.maxContentSize == screen)
         testVersionsAndFeed()
         testDictationCleaner()
         testSnippetsOutlineExport()
@@ -720,8 +726,7 @@ enum SelfTest {
         ws.maxContentOverride = CGSize(width: 700, height: 500)
         ws.apply(.quad)
         check("a preset that cannot fit is refused and nothing changes", ws.space.panels.map(\.id) == beforeIDs && treeOK(ws) && ws.space.tiling == .balanced)
-        ws.maxContentOverride = nil
-        ws.maxContentOverride = nil
+        ws.maxContentOverride = screen
     }
 
     @MainActor

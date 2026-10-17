@@ -16,7 +16,7 @@ open build/Build/Products/Debug/Panels.app
 # release build (what CI ships). Project pins Release to -Osize: -O crashed swiftc (LLVM dominance error)
 xcodebuild -project Panels.xcodeproj -scheme Panels -configuration Release -derivedDataPath build MARKETING_VERSION=1.0.0 build
 
-# headless self test: 201 checks, prints PASS or FAIL lines, exits. Always use a scratch data dir.
+# headless self test: 202 checks, prints PASS or FAIL lines, exits. Always use a scratch data dir.
 mkdir -p /tmp/panels-selftest-data && PANELS_SELFTEST=1 CFFIXED_USER_HOME=/tmp/panels-selftest-data PANELS_DATA_DIR=/tmp/panels-selftest-data PANELS_TIMER_SPEED=60 \
   PANELS_SELFTEST_LOG=/tmp/panels-selftest.log build/Build/Products/Debug/Panels.app/Contents/MacOS/Panels
 cat /tmp/panels-selftest.log   # last line is ALL PASSED or N FAILED
