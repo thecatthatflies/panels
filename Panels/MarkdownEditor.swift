@@ -546,6 +546,16 @@ final class NoteScrollView: NSScrollView {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         needsLayout = true
+        // With transparent backgrounds the clip view keeps stale pixels while the panel resizes
+        // (old lines at the wrong size, cut off at the bottom). Repaint everything on every size change.
+        contentView.needsDisplay = true
+        documentView?.needsDisplay = true
+    }
+
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        contentView.needsDisplay = true
+        documentView?.needsDisplay = true
     }
 
     override func layout() {
@@ -554,6 +564,11 @@ final class NoteScrollView: NSScrollView {
         if contentInsets.bottom != bottom { contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: bottom, right: 0) }
         guard let tv = documentView as? PanelTextView else { return }
         let w = contentSize.width
+        // The text view must always cover the whole visible area. If it is shorter than the clip view
+        // (short note, or the panel just grew), the uncovered strip is never repainted and old lines stay there.
+        let minH = max(contentSize.height - contentInsets.bottom - contentInsets.top, 0)
+        if tv.minSize.height != minH { tv.minSize = NSSize(width: 0, height: minH) }
+        if tv.frame.height < minH { tv.setFrameSize(NSSize(width: tv.frame.width, height: minH)) }
         var h = padding
         if measure > 0 { h = max(padding, (w - measure) / 2) }
         let inset = NSSize(width: h, height: padding)
@@ -618,6 +633,11 @@ final class NoteEditorHost: NSObject, NSTextViewDelegate, NSTextStorageDelegate 
         scrollView.autohidesScrollers = true
         scrollView.scrollerStyle = .overlay
         scrollView.drawsBackground = false
+        scrollView.contentView.drawsBackground = false
+        // Copy-on-scroll blits old pixels, which smears when nothing opaque sits behind the text.
+        scrollView.contentView.copiesOnScroll = false
+        scrollView.contentView.layerContentsRedrawPolicy = .duringViewResize
+        textView.layerContentsRedrawPolicy = .duringViewResize
         scrollView.borderType = .noBorder
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 6, right: 0)

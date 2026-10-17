@@ -343,18 +343,21 @@ struct AddressBar: View {
     let controller: WebController
     let accent: Color
     @Environment(\.theme) private var theme
+    @Environment(\.panelSize) private var size
     @State private var text = ""
     @FocusState private var focused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 4) {
-                IconButton(symbol: "chevron.left", help: "Back", size: 11, box: 24) { controller.goBack() }
-                    .opacity(controller.canGoBack ? 1 : 0.35)
-                    .disabled(!controller.canGoBack)
-                IconButton(symbol: "chevron.right", help: "Forward", size: 11, box: 24) { controller.goForward() }
-                    .opacity(controller.canGoForward ? 1 : 0.35)
-                    .disabled(!controller.canGoForward)
+                if size >= .regular {
+                    IconButton(symbol: "chevron.left", help: "Back", size: 11, box: 24) { controller.goBack() }
+                        .opacity(controller.canGoBack ? 1 : 0.35)
+                        .disabled(!controller.canGoBack)
+                    IconButton(symbol: "chevron.right", help: "Forward", size: 11, box: 24) { controller.goForward() }
+                        .opacity(controller.canGoForward ? 1 : 0.35)
+                        .disabled(!controller.canGoForward)
+                }
                 IconButton(symbol: controller.isLoading ? "xmark" : "arrow.clockwise",
                            help: controller.isLoading ? "Stop" : "Reload", size: 11, box: 24) {
                     controller.isLoading ? controller.stop() : controller.reload()
@@ -375,6 +378,7 @@ struct AddressBar: View {
                         }
                 }
                 .padding(.horizontal, 10)
+                .frame(minWidth: 40)
                 .frame(height: 26)
                 .background(Capsule().fill(theme.hover))
                 .overlay(Capsule().strokeBorder(focused ? accent.opacity(0.7) : .clear, lineWidth: 1))

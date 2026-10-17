@@ -47,6 +47,9 @@ jobs:
             CODE_SIGN_IDENTITY="-" \
             build
 
+      - name: Self test
+        run: scripts/selftest.sh build/Build/Products/Release/Panels.app
+
       - name: Package
         run: |
           ditto -c -k --sequesterRsrc --keepParent \

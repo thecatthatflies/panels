@@ -80,8 +80,8 @@ struct SplitContainer: View {
             let extent = horizontal ? geo.size.width : geo.size.height
             let total = max(extent - gap * CGFloat(max(count - 1, 0)), 1)
             let weights = safeWeights()
-            let sum = max(weights.reduce(0, +), 0.0001)
-            let sizes = weights.map { total * CGFloat($0 / sum) }
+            let mins = node.children.map { $0.minExtent(along: node.axis, gap: gap) }
+            let sizes = SplitFit.sizes(weights: weights, mins: mins, total: total)
             let offsets = offsets(for: sizes, gap: gap)
 
             ZStack(alignment: .topLeading) {

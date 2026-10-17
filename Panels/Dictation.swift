@@ -118,6 +118,38 @@ final class DictationController {
     var preview = ""
     var targetPanelID: UUID?
     var lastError: String?
+    /// A card asking before the system microphone prompt, or explaining how to recover after a denial.
+    var permissionCard: Gate?
+    @ObservationIgnored private var pendingPanel: Panel?
+    @ObservationIgnored private var primed = false
+
+    enum Gate: Equatable { case proceed, prime, denied }
+
+    /// What to do before touching the microphone. Priming only happens before the system's one time prompt.
+    static func gate(for status: AVAuthorizationStatus, primed: Bool) -> Gate {
+        switch status {
+        case .authorized: return .proceed
+        case .notDetermined: return primed ? .proceed : .prime
+        default: return .denied
+        }
+    }
+
+    func dismissPermissionCard() { permissionCard = nil; pendingPanel = nil }
+
+    func continueAfterPriming() {
+        let panel = pendingPanel
+        primed = true
+        permissionCard = nil
+        pendingPanel = nil
+        start(panel)
+    }
+
+    func openMicrophoneSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+            NSWorkspace.shared.open(url)
+        }
+        dismissPermissionCard()
+    }
 
     @ObservationIgnored private let engine = AVAudioEngine()
     @ObservationIgnored private var analyzer: SpeechAnalyzer?
@@ -144,6 +176,14 @@ final class DictationController {
         guard let panel, panel.kind == .note || panel.kind == .terminal else {
             Workspace.shared.showToast("Select a note or terminal to dictate into")
             return
+        }
+        if ProcessInfo.processInfo.environment["PANELS_DICTATION_FILE"] == nil {
+            let gate = Self.gate(for: AVCaptureDevice.authorizationStatus(for: .audio), primed: primed)
+            if gate != .proceed {
+                pendingPanel = panel
+                permissionCard = gate
+                return
+            }
         }
         generation += 1
         let mine = generation

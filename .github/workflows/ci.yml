@@ -1,0 +1,33 @@
+name: CI
+
+# Build and self test on pull requests and feature branches. Never publishes.
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Build
+        run: |
+          xcodebuild \
+            -project Panels.xcodeproj \
+            -scheme Panels \
+            -configuration Debug \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="-" \
+            build
+
+      - name: Self test
+        run: scripts/selftest.sh build/Build/Products/Debug/Panels.app

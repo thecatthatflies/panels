@@ -411,6 +411,8 @@ struct MarkdownImage: View {
 struct NotePanelView: View {
     @Bindable var panel: Panel
     @Environment(\.theme) private var theme
+    @Environment(\.panelSize) private var size
+    @Environment(\.panelDims) private var dims
     private let ws = Workspace.shared
     @State private var showFonts = false
 
@@ -419,13 +421,21 @@ struct NotePanelView: View {
     /// Settings as rendered. Lock In widens the margins, centers a reading column and turns on
     /// typewriter scrolling and paragraph dimming without touching the saved panel settings.
     private var eff: PanelSettings {
-        guard ws.focusMode else { return panel.settings }
+        guard ws.focusMode else { return fitted(panel.settings) }
         var s = panel.settings
         if s.measure == 0 { s.measure = 740 }
         s.padding = max(s.padding, 44)
         s.typewriter = true
         s.dimParagraphs = true
         s.showStats = false
+        return s
+    }
+
+    /// Margins shrink with the panel so small notes keep a usable text area.
+    private func fitted(_ settings: PanelSettings) -> PanelSettings {
+        var s = settings
+        if size == .tiny { s.padding = min(s.padding, 8) }
+        else if size == .small { s.padding = min(s.padding, max(10, Double(dims.width * 0.06))) }
         return s
     }
 
@@ -458,7 +468,7 @@ struct NotePanelView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if eff.showStats { footer }
+            if eff.showStats && size >= .regular { footer }
         }
     }
 
@@ -487,9 +497,9 @@ struct NotePanelView: View {
     private var footer: some View {
         let s = stats
         return HStack(spacing: 14) {
-            Text("\(s.words) \(s.words == 1 ? "word" : "words")")
-            Text("\(s.chars) characters")
-            if s.minutes > 0 { Text("\(s.minutes) min read") }
+            Text("\(s.words) \(s.words == 1 ? "word" : "words")").lineLimit(1).fixedSize()
+            if size >= .roomy { Text("\(s.chars) characters").lineLimit(1).fixedSize() }
+            if s.minutes > 0 && size >= .roomy { Text("\(s.minutes) min read").lineLimit(1).fixedSize() }
             Spacer()
             Button { showFonts.toggle() } label: {
                 HStack(spacing: 4) {

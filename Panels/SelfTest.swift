@@ -64,6 +64,11 @@ enum SelfTest {
         testEditor()
         await testSound()
         testSettingsCodable()
+        testDataSafety()
+        testSizeClasses()
+        testTaskRemoval()
+        testOnboarding()
+        testDictationGate()
     }
 
     // MARK: helpers
@@ -418,6 +423,74 @@ enum SelfTest {
         await sleep(0.3)
         check("switching every pack and turning sound off is safe", true)
         settings.prefs = saved
+    }
+
+    @MainActor
+    private static func testDictationGate() {
+        typealias G = DictationController
+        check("mic gate: authorized goes straight through", G.gate(for: .authorized, primed: false) == .proceed)
+        check("mic gate: first time shows the priming card", G.gate(for: .notDetermined, primed: false) == .prime)
+        check("mic gate: after priming the system prompt may run", G.gate(for: .notDetermined, primed: true) == .proceed)
+        check("mic gate: denied shows the recovery card", G.gate(for: .denied, primed: true) == .denied && G.gate(for: .restricted, primed: false) == .denied)
+    }
+
+    @MainActor
+    private static func testOnboarding() {
+        check("onboarding stays closed during the self test", !Onboarding.shouldShow && !Workspace.shared.onboardingOpen)
+        let ids = TemplateStore.builtins.map(\.id)
+        check("builtin templates have stable ids", ids == TemplateStore.builtins.map(\.id) && Set(ids).count == ids.count)
+        let before = Workspace.shared.spaces.count
+        Workspace.shared.newSpace(from: TemplateStore.builtins[1])
+        check("a starting template adds one workspace", Workspace.shared.spaces.count == before + 1 && treeOK(Workspace.shared))
+    }
+
+    @MainActor
+    private static func testTaskRemoval() {
+        let p = Panel(kind: .tasks, title: "T", text: "", tasks: [TaskItem(title: "a"), TaskItem(title: "b")])
+        let id = p.tasks[0].id
+        p.removeTask(id)
+        check("removing a task by id leaves the others", p.tasks.count == 1 && p.tasks[0].title == "b")
+    }
+
+    @MainActor
+    private static func testSizeClasses() {
+        check("size class tiny", PanelSize.classify(CGSize(width: 120, height: 80)) == .tiny)
+        check("size class small", PanelSize.classify(CGSize(width: 240, height: 150)) == .small)
+        check("size class regular", PanelSize.classify(CGSize(width: 320, height: 300)) == .regular)
+        check("size class roomy", PanelSize.classify(CGSize(width: 800, height: 600)) == .roomy)
+        let even = SplitFit.sizes(weights: [1, 1], mins: [100, 100], total: 600)
+        check("split fit keeps even weights", even == [300, 300])
+        let squeezed = SplitFit.sizes(weights: [9, 1], mins: [100, 200], total: 600)
+        check("split fit lifts a small child to its minimum", squeezed[1] == 200 && abs(squeezed.reduce(0, +) - 600) < 0.01, "\(squeezed)")
+        let cramped = SplitFit.sizes(weights: [1, 1], mins: [400, 400], total: 600)
+        check("split fit degrades evenly when minimums cannot fit", abs(cramped.reduce(0, +) - 600) < 0.01 && cramped[0] == cramped[1])
+    }
+
+    @MainActor
+    private static func testDataSafety() {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("panels-safety-\(UUID().uuidString)", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("workspace.json")
+        check("load with no file returns nil and no notice", Persistence.load(from: file) == nil && Persistence.loadNotice == nil)
+        try? Data("{ not json".utf8).write(to: file)
+        let snap = Persistence.load(from: file)
+        let kept = ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).filter { $0.hasPrefix("workspace.corrupt-") }
+        check("unreadable workspace is moved aside, not lost", snap == nil && kept.count == 1 && !fm.fileExists(atPath: file.path))
+        check("unreadable workspace sets a notice", Persistence.loadNotice != nil)
+        Persistence.loadNotice = nil
+        let old = WorkspaceSnapshot(spaces: Workspace.shared.spaces, active: Workspace.shared.activeSpaceID, popouts: nil)
+        try? JSONEncoder().encode(old).write(to: file)
+        check("old file without schemaVersion still loads", Persistence.load(from: file) != nil)
+        let bdir = dir.appendingPathComponent("Backups", isDirectory: true)
+        try? fm.createDirectory(at: bdir, withIntermediateDirectories: true)
+        let t0 = Date()
+        check("first backup is written", Persistence.backupIfDue(file: file, into: bdir, now: t0))
+        check("second backup within interval is skipped", !Persistence.backupIfDue(file: file, into: bdir, now: t0.addingTimeInterval(5)))
+        for i in 1...4 { Persistence.backupIfDue(file: file, into: bdir, interval: 0, keep: 3, now: t0.addingTimeInterval(Double(i) * 1000)) }
+        let n = ((try? fm.contentsOfDirectory(atPath: bdir.path)) ?? []).count
+        check("backups are pruned to the keep count", n == 3, "\(n)")
     }
 
     @MainActor

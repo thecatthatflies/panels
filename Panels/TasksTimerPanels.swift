@@ -7,26 +7,43 @@ import Observation
 struct TasksPanelView: View {
     @Bindable var panel: Panel
     @Environment(\.theme) private var theme
+    @Environment(\.panelSize) private var size
     @State private var draft = ""
+    @State private var addRevealed = false
     @FocusState private var addFocused: Bool
+
+    /// Small panels keep the list on screen and show the add field only on demand.
+    private var addVisible: Bool { size >= .regular || addRevealed || panel.tasks.isEmpty && size >= .small }
 
     private var accent: Color { theme.accent(panel.settings.accent) }
     private var doneCount: Int { panel.tasks.filter { $0.done }.count }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            addField
-                .padding(.horizontal, CGFloat(panel.settings.padding))
-                .padding(.top, 2)
-                .padding(.bottom, 10)
+            if addVisible {
+                addField
+                    .padding(.horizontal, size >= .regular ? CGFloat(panel.settings.padding) : 8)
+                    .padding(.top, 2)
+                    .padding(.bottom, size >= .regular ? 10 : 4)
+            } else if size == .small {
+                Button { addRevealed = true; addFocused = true } label: {
+                    Label("Add a task", systemImage: "plus")
+                        .font(Typo.ui(11.5, bold: true))
+                        .foregroundStyle(accent)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                }
+                .buttonStyle(.plain)
+            }
 
             if panel.tasks.isEmpty {
                 emptyState
             } else {
                 List {
                     ForEach($panel.tasks) { $task in
+                        // Capture the id now: reading `task` inside removeAll would touch panel.tasks mid-mutation and trap.
+                        let id = task.id
                         TaskRow(task: $task, accent: accent) {
-                            withAnimation(.snappy(duration: 0.25)) { panel.tasks.removeAll { $0.id == task.id } }
+                            withAnimation(.snappy(duration: 0.25)) { panel.removeTask(id) }
                         }
                         .opacity(panel.settings.hideDone && task.done ? 0 : 1)
                         .frame(height: panel.settings.hideDone && task.done ? 0 : nil)
@@ -41,9 +58,10 @@ struct TasksPanelView: View {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
 
-                footer
+                if size >= .regular { footer }
             }
         }
+        .onChange(of: addFocused) { _, f in if !f && draft.isEmpty { addRevealed = false } }
     }
 
     private var addField: some View {
@@ -80,9 +98,16 @@ struct TasksPanelView: View {
             Text("No tasks yet")
                 .font(Typo.ui(13.5, bold: true))
                 .foregroundStyle(theme.mutedC)
-            Text("Type above and press Return.")
+            Text(size >= .regular ? "Type above and press Return." : "Add your first one.")
                 .font(Typo.ui(12))
                 .foregroundStyle(theme.faintC)
+            if size < .regular {
+                Button { addRevealed = true; addFocused = true } label: {
+                    Label("Add a task", systemImage: "plus")
+                        .font(Typo.ui(11.5, bold: true)).foregroundStyle(accent)
+                }
+                .buttonStyle(.plain)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.bottom, 30)
@@ -363,7 +388,8 @@ struct TimerPanelView: View {
 
         GeometryReader { geo in
             let w = geo.size.width, h = geo.size.height
-            let mode: Mode = (h < 190 || w < 230) ? .compact : ((w / h > 1.45 && h < 460) ? .wide : .tall)
+            let wideNeeds: CGFloat = 120 + 30 + 300
+            let mode: Mode = (h < 190 || w < 230) ? .compact : ((w / h > 1.45 && h < 460 && w >= wideNeeds) ? .wide : .tall)
 
             Group {
                 switch mode {
@@ -410,23 +436,24 @@ struct TimerPanelView: View {
         let showTime = model.clock(model.remaining)
         let fraction = display == .idle || display == .restReady ? 0 : model.progress
         return VStack(spacing: 10) {
-            HStack(spacing: 14) {
+            HStack(spacing: width < 150 ? 4 : 14) {
                 Text(showTime)
                     .font(.system(size: min(max(width * 0.16, 24), 46), weight: .light, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(theme.textC)
                     .contentTransition(.numericText(countsDown: true))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                Spacer(minLength: 4)
-                if display != .idle && display != .restReady {
+                    .minimumScaleFactor(0.4)
+                    .layoutPriority(1)
+                Spacer(minLength: 2)
+                if display != .idle && display != .restReady && width >= 150 {
                     IconButton(symbol: "xmark", help: "Cancel", size: 11, box: 28) { model.reset() }
                 }
                 Button { model.toggle() } label: {
                     Image(systemName: running ? "pause.fill" : "play.fill")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(theme.isDark ? Color.black.opacity(0.85) : Color.white)
-                        .frame(width: 40, height: 40)
+                        .frame(width: width < 150 ? 30 : 40, height: width < 150 ? 30 : 40)
                         .background(Circle().fill(tint))
                         .contentShape(Circle())
                         .contentTransition(.symbolEffect(.replace))

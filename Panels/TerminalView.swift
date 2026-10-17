@@ -921,10 +921,11 @@ final class TerminalNSView: NSView {
 struct TerminalRepresentable: NSViewRepresentable {
     let panel: Panel
     let theme: Theme
+    var settings: PanelSettings
 
     func makeNSView(context: Context) -> HostContainer {
         let controller = Runtime.shared.terminal(for: panel)
-        controller.apply(settings: panel.settings, theme: theme)
+        controller.apply(settings: settings, theme: theme)
         let c = HostContainer()
         c.attach(controller.view, steal: true)
         return c
@@ -933,7 +934,7 @@ struct TerminalRepresentable: NSViewRepresentable {
     func updateNSView(_ container: HostContainer, context: Context) {
         let controller = Runtime.shared.terminal(for: panel)
         container.attach(controller.view, steal: false)
-        controller.apply(settings: panel.settings, theme: theme)
+        controller.apply(settings: settings, theme: theme)
     }
 
     static func dismantleNSView(_ container: HostContainer, coordinator: ()) {
@@ -944,9 +945,18 @@ struct TerminalRepresentable: NSViewRepresentable {
 struct TerminalPanelView: View {
     @Bindable var panel: Panel
     @Environment(\.theme) private var theme
+    @Environment(\.panelSize) private var size
+
+    /// Inner margin shrinks with the panel so a small terminal still shows text.
+    private var settings: PanelSettings {
+        var s = panel.settings
+        if size == .tiny { s.padding = min(s.padding, 4) }
+        else if size == .small { s.padding = min(s.padding, 8) }
+        return s
+    }
 
     var body: some View {
-        TerminalRepresentable(panel: panel, theme: theme)
-            .padding(.bottom, 4)
+        TerminalRepresentable(panel: panel, theme: theme, settings: settings)
+            .padding(.bottom, size <= .small ? 0 : 4)
     }
 }

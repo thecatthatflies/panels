@@ -214,6 +214,7 @@ struct PopoutRoot: View {
             PanelBodyView(panel: panel)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .measuresPanelSize()
         .background(shape.fill(surface))
         .clipShape(shape)
         .overlay(shape.strokeBorder(theme.hairlineStrong, lineWidth: 1))

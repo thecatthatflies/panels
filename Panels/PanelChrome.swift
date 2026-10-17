@@ -6,6 +6,7 @@ import AppKit
 struct PanelView: View {
     @Bindable var panel: Panel
     @Environment(\.theme) private var theme
+    @Environment(\.panelSize) private var size
     private let ws = Workspace.shared
     private let appearance = Appearance.shared
 
@@ -45,6 +46,7 @@ struct PanelView: View {
         .overlay { dragLayer(shape) }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ws.frames[panel.id] = $0 }
         .onHover { hovering = $0 }
+        .measuresPanelSize()
         .animation(Motion.quick, value: isFocused)
         .scaleEffect(appeared ? 1 : 0.985)
         .opacity(appeared ? 1 : 0)
@@ -117,6 +119,117 @@ struct PanelView: View {
     // MARK: header
 
     private var header: some View {
+        headerRow
+            .frame(height: locked ? 30 : headerHeight)
+            .opacity(locked ? 0.55 : 1)
+            .contentShape(Rectangle())
+            .onTapGesture { ws.focus(panel.id) }
+            .simultaneousGesture(TapGesture(count: 2).onEnded {
+                renaming = true
+                DispatchQueue.main.async { titleFocused = true }
+            })
+            .onDrag {
+                PanelDrag.begin(panel.id)
+                return NSItemProvider(object: panel.id.uuidString as NSString)
+            } preview: { dragPreview }
+            .contextMenu { panelMenuItems }
+    }
+
+    private var headerHeight: CGFloat { size == .tiny ? 20 : CGFloat(appearance.headerHeight) }
+
+    @ViewBuilder
+    private var headerRow: some View {
+        if size == .tiny { tinyHeader }
+        else if size == .small { smallHeader }
+        else { fullHeader }
+    }
+
+    private var tinyHeader: some View {
+        HStack(spacing: 0) {
+            overflowMenu
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 6)
+    }
+
+    private var smallHeader: some View {
+        HStack(spacing: 6) {
+            Image(systemName: panel.kind.symbol)
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(accent)
+                .frame(width: 16)
+            Text(panel.title.isEmpty ? panel.kind.defaultTitle : panel.title)
+                .font(Typo.ui(12, bold: true))
+                .foregroundStyle(isFocused ? theme.textC : theme.mutedC)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
+            Spacer(minLength: 4)
+            overflowMenu
+        }
+        .padding(.horizontal, 8)
+    }
+
+    /// One menu that holds every header action, for panels too small for the full button row.
+    private var overflowMenu: some View {
+        Menu {
+            if panel.kind == .note || panel.kind == .terminal {
+                Button("Dictate", systemImage: "mic") { DictationController.shared.toggle(for: panel) }
+            }
+            Menu("Split Right", systemImage: "rectangle.split.2x1") { splitMenu(axis: .horizontal) }
+            Menu("Split Down", systemImage: "rectangle.split.1x2") { splitMenu(axis: .vertical) }
+            Button("Panel Settings", systemImage: "slider.horizontal.3") { showSettings = true }
+            Button(isZoomed ? "Restore" : "Zoom", systemImage: "arrow.up.left.and.arrow.down.right") { ws.toggleZoom(panel.id) }
+            Button("Pop Out", systemImage: "arrow.up.forward.square") { ws.popOut(panel.id) }
+            Divider()
+            Button("Close", systemImage: "xmark", role: .destructive) { ws.close(panel.id) }
+        } label: {
+            Image(systemName: size == .tiny ? "circle.fill" : "ellipsis")
+                .font(.system(size: size == .tiny ? 7 : 11, weight: .semibold))
+                .foregroundStyle(size == .tiny ? accent : theme.mutedC)
+                .frame(width: size == .tiny ? 14 : 22, height: 20)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .frame(width: size == .tiny ? 14 : 22, height: 20)
+        .help("Panel actions")
+        .popover(isPresented: $showSettings, arrowEdge: .bottom) {
+            PanelSettingsView(panel: panel).environment(\.theme, theme)
+        }
+    }
+
+    private var dragPreview: some View {
+        HStack(spacing: 8) {
+            Image(systemName: panel.kind.symbol).foregroundStyle(accent)
+            Text(panel.title).font(Typo.ui(13, bold: true)).foregroundStyle(theme.textC)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(Capsule().fill(theme.raisedC))
+        .overlay(Capsule().strokeBorder(accent.opacity(0.7), lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private var panelMenuItems: some View {
+        Button("Rename") { renaming = true; DispatchQueue.main.async { titleFocused = true } }
+        Button("Duplicate") { ws.duplicate(panel.id) }
+        Button(isZoomed ? "Restore" : "Zoom") { ws.toggleZoom(panel.id) }
+        Button("Pop Out into Window") { ws.popOut(panel.id) }
+        if ws.spaces.count > 1 {
+            Menu("Move to Workspace") {
+                ForEach(ws.spaces.filter { $0.id != ws.activeSpaceID }) { sp in
+                    Button { ws.move(panel: panel.id, toSpace: sp.id) } label: { Label(sp.name, systemImage: sp.symbol) }
+                }
+            }
+        }
+        if panel.kind == .note { Button("Save as Markdown...") { FileOps.saveMarkdown(panel) } }
+        Divider()
+        Button("Close", role: .destructive) { ws.close(panel.id) }
+    }
+
+    private var fullHeader: some View {
         HStack(spacing: 9) {
             Image(systemName: panel.kind.symbol)
                 .font(.system(size: 11.5, weight: .semibold))
@@ -190,43 +303,6 @@ struct PanelView: View {
             .animation(Motion.quick, value: showActions)
         }
         .padding(.horizontal, 12)
-        .frame(height: locked ? 30 : CGFloat(appearance.headerHeight))
-        .opacity(locked ? 0.55 : 1)
-        .contentShape(Rectangle())
-        .onTapGesture { ws.focus(panel.id) }
-        .simultaneousGesture(TapGesture(count: 2).onEnded {
-            renaming = true
-            DispatchQueue.main.async { titleFocused = true }
-        })
-        .onDrag {
-            PanelDrag.begin(panel.id)
-            return NSItemProvider(object: panel.id.uuidString as NSString)
-        } preview: {
-            HStack(spacing: 8) {
-                Image(systemName: panel.kind.symbol).foregroundStyle(accent)
-                Text(panel.title).font(Typo.ui(13, bold: true)).foregroundStyle(theme.textC)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(Capsule().fill(theme.raisedC))
-            .overlay(Capsule().strokeBorder(accent.opacity(0.7), lineWidth: 1))
-        }
-        .contextMenu {
-            Button("Rename") { renaming = true; DispatchQueue.main.async { titleFocused = true } }
-            Button("Duplicate") { ws.duplicate(panel.id) }
-            Button(isZoomed ? "Restore" : "Zoom") { ws.toggleZoom(panel.id) }
-            Button("Pop Out into Window") { ws.popOut(panel.id) }
-            if ws.spaces.count > 1 {
-                Menu("Move to Workspace") {
-                    ForEach(ws.spaces.filter { $0.id != ws.activeSpaceID }) { sp in
-                        Button { ws.move(panel: panel.id, toSpace: sp.id) } label: { Label(sp.name, systemImage: sp.symbol) }
-                    }
-                }
-            }
-            if panel.kind == .note { Button("Save as Markdown...") { FileOps.saveMarkdown(panel) } }
-            Divider()
-            Button("Close", role: .destructive) { ws.close(panel.id) }
-        }
     }
 
     @ViewBuilder

@@ -18,6 +18,7 @@ struct PanelsCommands: Commands {
         }
 
         CommandGroup(after: .help) {
+            Button("Show Welcome Again") { ws.onboardingOpen = true }
             Divider()
             Button("Support Panels...") { AboutLinks.open(AboutLinks.support) }
             Button("Visit aiyan.tech") { AboutLinks.open(AboutLinks.portfolio) }

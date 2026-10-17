@@ -207,6 +207,8 @@ struct TaskItem: Codable, Identifiable, Equatable {
 
 @Observable
 final class Panel: Identifiable, Codable {
+    func removeTask(_ id: UUID) { tasks.removeAll { $0.id == id } }
+
     let id: UUID
     var kind: PanelKind
     var title: String { didSet { Persistence.markDirty() } }
@@ -497,6 +499,7 @@ final class Workspace {
     var spaces: [Space]
     var activeSpaceID: UUID
     var paletteOpen = false
+    var onboardingOpen = false
     var toast: String?
     var draggingID: UUID?
     var popouts: [Popout] = []
@@ -523,6 +526,11 @@ final class Workspace {
             spaces = [s]
             activeSpaceID = s.id
         }
+        if let notice = Persistence.loadNotice {
+            Persistence.loadNotice = nil
+            showToast(notice)
+        }
+        if Onboarding.shouldShow { onboardingOpen = true }
     }
 
     var space: Space { spaces.first { $0.id == activeSpaceID } ?? spaces[0] }

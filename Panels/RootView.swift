@@ -45,6 +45,18 @@ struct RootView: View {
                     .zIndex(10)
             }
 
+            if let gate = DictationController.shared.permissionCard {
+                DictationPermissionCard(gate: gate)
+                    .transition(.opacity)
+                    .zIndex(29)
+            }
+
+            if ws.onboardingOpen {
+                OnboardingView()
+                    .transition(.opacity)
+                    .zIndex(30)
+            }
+
             if let toast = ws.toast {
                 VStack {
                     Spacer()
@@ -70,6 +82,8 @@ struct RootView: View {
         .frame(minWidth: 760, minHeight: 500)
         .animation(.smooth(duration: 0.5), value: locked)
         .animation(.snappy(duration: 0.22), value: ws.paletteOpen)
+        .animation(.snappy(duration: 0.22), value: ws.onboardingOpen)
+        .animation(.snappy(duration: 0.22), value: DictationController.shared.permissionCard)
         .animation(Motion.layout, value: DictationController.shared.isActive)
         .animation(.spring(response: 0.38, dampingFraction: 0.82), value: ws.toast)
         .animation(.smooth(duration: 0.4), value: theme.id)
