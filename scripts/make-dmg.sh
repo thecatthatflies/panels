@@ -2,7 +2,9 @@
 # Builds a styled Panels.dmg from a built Panels.app.
 # Usage: scripts/make-dmg.sh path/to/Panels.app [output.dmg]
 # Optional: DMG_SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" signs the finished image.
-# The window layout needs Finder scripting. If that is not allowed, the DMG is still built, just without the layout.
+# The window layout comes from scripts/dmg/DS_Store (a saved Finder layout), so no Finder scripting is needed (CI).
+# DMG_FINDER_LAYOUT=1 lays the window out with Finder instead and saves the result as the new template.
+# Without the template, Finder scripting is tried; if that fails the DMG is built without a layout.
 set -eu
 
 APP="${1:?Usage: scripts/make-dmg.sh path/to/Panels.app [output.dmg]}"
@@ -16,6 +18,12 @@ RW="$WORK/rw.dmg"
 mkdir -p "$STAGE/.background"
 cp -R "$APP" "$STAGE/Panels.app"
 ln -s /Applications "$STAGE/Applications"
+TEMPLATE="$HERE/dmg/DS_Store"
+USE_TEMPLATE=0
+if [ -f "$TEMPLATE" ] && [ "${DMG_FINDER_LAYOUT:-0}" != 1 ]; then
+  cp "$TEMPLATE" "$STAGE/.DS_Store"
+  USE_TEMPLATE=1
+fi
 
 # one TIFF that carries both the 1x and 2x backgrounds, so it is sharp on Retina screens
 tiffutil -cathidpicheck "$HERE/dmg/background.png" "$HERE/dmg/background@2x.png" -out "$STAGE/.background/background.tiff" >/dev/null
@@ -36,8 +44,10 @@ MOUNT="/Volumes/$VOL"
 
 if command -v SetFile >/dev/null 2>&1; then SetFile -a C "$MOUNT" || true; fi
 
-# window layout: 660 by 400 content, app on the left, Applications on the right, background behind
-if ! timeout 90 osascript <<APPLESCRIPT
+# window layout (only without the template): 660 by 400 content, app on the left, Applications on the right, background behind
+if [ "$USE_TEMPLATE" = 1 ]; then
+  echo "using saved window layout"
+elif ! timeout 90 osascript <<APPLESCRIPT
 tell application "Finder"
   tell disk "$VOL"
     open
@@ -60,6 +70,9 @@ end tell
 APPLESCRIPT
 then
   echo "warning: Finder scripting failed, building the DMG without a custom layout" >&2
+elif [ "${DMG_FINDER_LAYOUT:-0}" = 1 ]; then
+  sync; sleep 1
+  cp "$MOUNT/.DS_Store" "$TEMPLATE" && echo "saved window layout to $TEMPLATE"
 fi
 
 sync
