@@ -1,7 +1,8 @@
 name: Release
 
-# Every push to main builds Panels and publishes a GitHub release containing Panels.zip.
-# Installed copies of the app poll the latest release and update themselves.
+# Every push to main builds Panels and publishes a GitHub release containing Panels.dmg.
+# The website and the in-app updater both download that disk image.
+# Versions start at 1.0.0 and the patch number goes up by one per release.
 
 on:
   push:
@@ -31,9 +32,19 @@ jobs:
 
       - name: Compute version
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # next patch after the latest release, or 1.0.0 when there is none
+          LAST="$(gh release view --repo "${{ github.repository }}" --json tagName --jq .tagName 2>/dev/null || true)"
+          if [ -z "$LAST" ]; then
+            NEXT="1.0.0"
+          else
+            IFS=. read -r MAJ MIN PAT <<< "${LAST#v}"
+            NEXT="${MAJ}.${MIN}.$(( ${PAT:-0} + 1 ))"
+          fi
           echo "number=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-          echo "marketing=1.0.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "marketing=$NEXT" >> "$GITHUB_OUTPUT"
 
       - name: Build
         run: |
@@ -52,14 +63,13 @@ jobs:
 
       - name: Package
         run: |
-          ditto -c -k --sequesterRsrc --keepParent \
-            build/Build/Products/Release/Panels.app Panels.zip
+          scripts/make-dmg.sh build/Build/Products/Release/Panels.app Panels.dmg
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v${{ steps.version.outputs.marketing }}" Panels.zip \
+          gh release create "v${{ steps.version.outputs.marketing }}" Panels.dmg \
             --title "Panels ${{ steps.version.outputs.marketing }}" \
             --generate-notes \
             --latest

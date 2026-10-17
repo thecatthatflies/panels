@@ -136,7 +136,62 @@ enum SelfTest {
         let json = #"{"tag_name":"v9.1.2","body":"x","html_url":"https://x","assets":[{"name":"Panels.zip","browser_download_url":"https://x/Panels.zip"}]}"#
         let rel = Updater.parse(Data(json.utf8))
         check("updater parses a release feed", rel?.version == "9.1.2" && rel?.assetURL.lastPathComponent == "Panels.zip")
-        check("updater rejects a feed without a zip", Updater.parse(Data(#"{"tag_name":"v1","assets":[]}"#.utf8)) == nil)
+        check("updater rejects a feed without an app file", Updater.parse(Data(#"{"tag_name":"v1","assets":[]}"#.utf8)) == nil)
+        let both = #"{"tag_name":"v2","assets":[{"name":"Panels.dmg","browser_download_url":"https://x/Panels.dmg"},{"name":"Other.zip","browser_download_url":"https://x/Other.zip"},{"name":"Panels.zip","browser_download_url":"https://x/Panels.zip"}]}"#
+        check("updater picks Panels.dmg over zips", Updater.parse(Data(both.utf8))?.assetURL.lastPathComponent == "Panels.dmg")
+        let dmgOnly = #"{"tag_name":"v1.0.0","assets":[{"name":"Panels-1.0.0.dmg","browser_download_url":"https://x/Panels-1.0.0.dmg"}]}"#
+        check("updater accepts a release with only a dmg", Updater.parse(Data(dmgOnly.utf8))?.assetURL.pathExtension == "dmg")
+        check("updater reports a missing download", Updater.downloadProblem(status: 404) != nil && Updater.downloadProblem(status: 200) == nil
+              && Updater.downloadProblem(status: nil) == nil)
+
+        // The bug behind "Update failed": a copy opened from Downloads runs translocated (read-only),
+        // so the update must go to the original copy, and say so plainly when that cannot be found.
+        let moved = URL(fileURLWithPath: "/private/var/folders/x/T/AppTranslocation/AB12/d/Panels.app")
+        let original = URL(fileURLWithPath: "/Users/someone/Downloads/Panels.app")
+        let target = Updater.installTarget(running: moved, translocated: { _ in true }, original: { _ in original })
+        check("updater installs over the original of a translocated copy", target == original
+              && Updater.installBlocker(running: moved, target: target, canWrite: { _ in true }) == nil)
+        let lost = Updater.installBlocker(running: moved, target: Updater.installTarget(running: moved, translocated: { _ in true }, original: { _ in nil }))
+        check("updater explains a translocated copy it cannot place", lost?.contains("Applications") == true && lost?.contains("/private") == false)
+        check("updater spots translocation by path", Translocation.isTranslocated(moved) && !Translocation.isTranslocated(original))
+        let unwritable = Updater.installBlocker(running: original, target: original, canWrite: { _ in false })
+        check("updater names the folder it cannot write", unwritable?.contains("Downloads folder") == true)
+
+        // Replacing the bundle: new copy in place, old one kept beside it, quarantine stripped.
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("panels-update-test-\(UUID().uuidString)")
+        let dest = dir.appendingPathComponent("Panels.app"), fresh = dir.appendingPathComponent("new/Panels.app")
+        try? fm.createDirectory(at: dest.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        try? fm.createDirectory(at: fresh.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        try? "old".write(to: dest.appendingPathComponent("Contents/v"), atomically: true, encoding: .utf8)
+        try? "new".write(to: fresh.appendingPathComponent("Contents/v"), atomically: true, encoding: .utf8)
+        setxattr(fresh.path, "com.apple.quarantine", "0081;0;x;", 9, 0, 0)
+        let backup = try? Updater.replaceBundle(at: dest, with: fresh)
+        let now = try? String(contentsOf: dest.appendingPathComponent("Contents/v"), encoding: .utf8)
+        let old = backup.flatMap { try? String(contentsOf: $0.appendingPathComponent("Contents/v"), encoding: .utf8) }
+        check("updater swaps the app and keeps the old copy", now == "new" && old == "old"
+              && getxattr(dest.path, "com.apple.quarantine", nil, 0, 0, 0) < 0)
+        let blocked = dir.appendingPathComponent("missing/Panels.app")
+        check("updater leaves the app alone when the swap fails", (try? Updater.replaceBundle(at: dest, with: blocked)) == nil
+              && (try? String(contentsOf: dest.appendingPathComponent("Contents/v"), encoding: .utf8)) == "new")
+
+        // Releases ship a disk image: the app is copied out of it (and the image unmounted).
+        let stage = dir.appendingPathComponent("stage"), img = dir.appendingPathComponent("img/update.dmg")
+        try? fm.createDirectory(at: stage.appendingPathComponent("Panels.app/Contents"), withIntermediateDirectories: true)
+        try? fm.createDirectory(at: img.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? "dmg".write(to: stage.appendingPathComponent("Panels.app/Contents/v"), atomically: true, encoding: .utf8)
+        try? fm.createSymbolicLink(atPath: stage.appendingPathComponent("Applications").path, withDestinationPath: "/Applications")
+        let make = Process()
+        make.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+        make.arguments = ["create", "-quiet", "-volname", "PanelsTest", "-srcfolder", stage.path, "-format", "UDZO", img.path]
+        try? make.run(); make.waitUntilExit()
+        let outDir = dir.appendingPathComponent("unpacked")
+        try? fm.createDirectory(at: outDir, withIntermediateDirectories: true)
+        let fromDmg = Updater.unpack(img, into: outDir)
+        let mounted = (try? fm.contentsOfDirectory(atPath: dir.appendingPathComponent("img/mount").path))?.isEmpty ?? true
+        check("updater copies the app out of a dmg", make.terminationStatus == 0 && fromDmg?.lastPathComponent == "Panels.app"
+              && (try? String(contentsOf: fromDmg!.appendingPathComponent("Contents/v"), encoding: .utf8)) == "dmg" && mounted)
+        try? fm.removeItem(at: dir)
     }
 
     @MainActor

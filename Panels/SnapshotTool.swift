@@ -13,7 +13,8 @@ enum SnapshotTool {
         guard let dir = directory else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             render(into: dir)
-            NSApp.terminate(nil)
+            // The web shots wait on WebKit, whose replies arrive on the main queue, so they run as async steps.
+            renderSiteWeb(into: dir) { NSApp.terminate(nil) }
         }
     }
 
@@ -82,6 +83,38 @@ enum SnapshotTool {
             win.contentView = nil
         }
 
+        // Marketing shots for the website: one populated workspace per built-in theme, rendered at 1600 by 1000.
+        for t in Theme.all {
+            let w: CGFloat = 1600, h: CGFloat = 1000
+            let note = Panel(kind: .note, title: "Launch notes",
+                             text: "# Launch notes\n\nThe site goes live **Friday**. Everything else can wait until *Monday*.\n\n## Before then\n\n- Write the release notes\n- Record the short demo\n- Check the download link\n\nSee [the checklist](https://example.com) for the full list.\n")
+            let tasks = Panel(kind: .tasks, title: "Today",
+                              tasks: [TaskItem(title: "Reply to the design review", done: true), TaskItem(title: "Finish the release notes"),
+                                      TaskItem(title: "Record the demo"), TaskItem(title: "Test the download on a clean Mac"),
+                                      TaskItem(title: "Book the dentist", done: true)])
+            let timer = Panel(kind: .timer, title: "Focus")
+            let tree = TileEngine.build(panels: [note, tasks, timer], layout: .main, size: CGSize(width: w - 32, height: h - 32), gap: 12)
+            let root = NodeView(node: tree)
+                .environment(\.theme, t).padding(16).frame(width: w, height: h).background(t.windowC)
+            let host = NSHostingView(rootView: root)
+            host.frame = NSRect(x: 0, y: 0, width: w, height: h)
+            let win = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            win.contentView = host
+            win.setFrameOrigin(NSPoint(x: -6000, y: -6000))
+            win.orderBack(nil)
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.7))
+            host.layoutSubtreeIfNeeded()
+            if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/site-\(t.id).png"))
+            }
+            for l in tree.leaves() { if let p = l.panel { Runtime.shared.release(p.id) } }
+            win.contentView = nil
+        }
+
+        renderSitePanels(into: dir)
+
         for kind in PanelKind.allCases {
             let m = PanelSize.minimum(for: kind)
             let panel = Panel(kind: kind, title: kind == .note ? "A fairly long note title" : kind.defaultTitle,
@@ -149,5 +182,134 @@ enum SnapshotTool {
                 win.contentView = nil
             }
         }
+    }
+
+    /// Website shots of a terminal panel, one per built-in theme.
+    /// The terminal runs /bin/cat (silent, no prompt) and gets a scripted session fed straight to the emulator,
+    /// so no real shell, user name or host name ends up in the picture.
+    private static func renderSitePanels(into dir: String) {
+        var settings = PanelSettings()
+        settings.padding = 14
+        settings.shell = "/bin/cat"
+        let term = Panel(kind: .terminal, title: "site", settings: settings)
+        var fed = false
+        for t in Theme.all {
+            let w: CGFloat = 664, h: CGFloat = 480
+            let root = PanelView(panel: term).environment(\.theme, t).frame(width: w, height: h).background(t.windowC)
+            let host = NSHostingView(rootView: root)
+            host.frame = NSRect(x: 0, y: 0, width: w, height: h)
+            let win = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            win.contentView = host
+            win.setFrameOrigin(NSPoint(x: -6000, y: -6000))
+            win.orderBack(nil)
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+            host.layoutSubtreeIfNeeded()
+            let tc = Runtime.shared.terminal(for: term)
+            if !fed {
+                tc.emulator.feed(Array(terminalSession().utf8))
+                fed = true
+            }
+            tc.view.contentChanged()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/site-panel-terminal-\(t.id).png"))
+            }
+            win.contentView = nil
+        }
+        Runtime.shared.release(term.id)
+    }
+
+    /// Website shots of a web panel (the owner's portfolio), one per built-in theme. Loads once, then
+    /// re-renders the panel chrome per theme. WKWebView draws out of process, so cacheDisplay leaves the page
+    /// blank; WebKit's own snapshot is painted into the frame on top.
+    private static func renderSiteWeb(into dir: String, done: @escaping () -> Void) {
+        let w: CGFloat = 960, h: CGFloat = 640
+        let web = Panel(kind: .web, title: "aiyan.tech", url: "https://aiyan.tech")
+        let host = NSHostingView(rootView: AnyView(EmptyView()))
+        host.frame = NSRect(x: 0, y: 0, width: w, height: h)
+        let win = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        win.contentView = host
+        win.setFrameOrigin(NSPoint(x: -6000, y: -6000))
+        win.orderBack(nil)
+        let wc = Runtime.shared.web(for: web)
+        // The capture window sits off screen, which can make WebKit pause the page. This developer-only
+        // switch (WebKit SPI, checked before use) keeps it painting. Never used outside snapshots.
+        let occlusion = NSSelectorFromString("_setWindowOcclusionDetectionEnabled:")
+        if wc.webView.responds(to: occlusion), let imp = wc.webView.method(for: occlusion) {
+            typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+            unsafeBitCast(imp, to: Setter.self)(wc.webView, occlusion, false)
+        }
+        let themes = Theme.all
+        let deadline = Date().addingTimeInterval(30)
+
+        func finish() {
+            win.contentView = nil
+            Runtime.shared.release(web.id)
+            done()
+        }
+
+        func shoot(_ index: Int) {
+            guard index < themes.count else { return finish() }
+            let t = themes[index]
+            host.rootView = AnyView(PanelView(panel: web).environment(\.theme, t).frame(width: w, height: h).background(t.windowC))
+            host.layoutSubtreeIfNeeded()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                host.layoutSubtreeIfNeeded()
+                wc.webView.takeSnapshot(with: nil) { img, _ in
+                    if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                        host.cacheDisplay(in: host.bounds, to: rep)
+                        if let img, let ctx = NSGraphicsContext(bitmapImageRep: rep) {
+                            NSGraphicsContext.saveGraphicsState()
+                            NSGraphicsContext.current = ctx
+                            img.draw(in: wc.webView.convert(wc.webView.bounds, to: nil))
+                            NSGraphicsContext.restoreGraphicsState()
+                        }
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/site-panel-web-\(t.id).png"))
+                    }
+                    shoot(index + 1)
+                }
+            }
+        }
+
+        func waitForLoad() {
+            if (wc.isLoading || wc.webView.url == nil) && Date() < deadline {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { waitForLoad() }
+            } else {
+                // let late fonts and images settle
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { shoot(0) }
+            }
+        }
+
+        host.rootView = AnyView(PanelView(panel: web).environment(\.theme, themes[0]).frame(width: w, height: h).background(themes[0].windowC))
+        host.layoutSubtreeIfNeeded()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { waitForLoad() }
+    }
+
+    /// A short, believable build session with prompt colors, in plain ANSI.
+    private static func terminalSession() -> String {
+        let dim = "\u{1B}[2m", bold = "\u{1B}[1m", green = "\u{1B}[32m", cyan = "\u{1B}[36m", yellow = "\u{1B}[33m", reset = "\u{1B}[0m"
+        let prompt = "\(cyan)~/Projects/site\(reset) \(yellow)main\(reset) $ "
+        let lines = [
+            "\(prompt)git pull",
+            "Already up to date.",
+            "\(prompt)npm run build",
+            "",
+            "\(dim)> site@1.0.0 build\(reset)",
+            "\(dim)> tsc -b && vite build\(reset)",
+            "",
+            "\(cyan)vite v7.1.3\(reset) \(green)building for production...\(reset)",
+            "\(green)✓\(reset) 48 modules transformed.",
+            "\(dim)dist/\(reset)index.html                 \(bold)1.75 kB\(reset)",
+            "\(dim)dist/assets/\(reset)index.css         \(bold)20.71 kB\(reset)",
+            "\(dim)dist/assets/\(reset)index.js         \(bold)436.32 kB\(reset)",
+            "\(green)✓ built in 2.06s\(reset)",
+            "\(prompt)git commit -am \"launch page\"",
+            "[main 4f2c1d8] launch page",
+            " 3 files changed, 41 insertions(+), 12 deletions(-)",
+            prompt,
+        ]
+        return lines.joined(separator: "\r\n")
     }
 }

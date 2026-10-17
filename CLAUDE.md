@@ -16,7 +16,7 @@ open build/Build/Products/Debug/Panels.app
 # release build (what CI ships). Project pins Release to -Osize: -O crashed swiftc (LLVM dominance error)
 xcodebuild -project Panels.xcodeproj -scheme Panels -configuration Release -derivedDataPath build MARKETING_VERSION=1.0.0 build
 
-# headless self test: 189 checks, prints PASS or FAIL lines, exits. Always use a scratch data dir.
+# headless self test: 201 checks, prints PASS or FAIL lines, exits. Always use a scratch data dir.
 mkdir -p /tmp/panels-selftest-data && PANELS_SELFTEST=1 CFFIXED_USER_HOME=/tmp/panels-selftest-data PANELS_DATA_DIR=/tmp/panels-selftest-data PANELS_TIMER_SPEED=60 \
   PANELS_SELFTEST_LOG=/tmp/panels-selftest.log build/Build/Products/Debug/Panels.app/Contents/MacOS/Panels
 cat /tmp/panels-selftest.log   # last line is ALL PASSED or N FAILED
@@ -26,6 +26,9 @@ PANELS_DATA_DIR=/tmp/panels-snap-data PANELS_SNAPSHOTS=/tmp/panels-snaps build/B
 
 # same self test as a script (what CI runs): exits 1 on any FAIL, timeout or unfinished run
 scripts/selftest.sh build/Build/Products/Debug/Panels.app
+
+# styled disk image from a built app (needs Finder scripting permission for the window layout)
+scripts/make-dmg.sh build/Build/Products/Release/Panels.app Panels.dmg
 
 # dictation training data and scoring (standard library Python only)
 python3 ml/gen_data.py && python3 ml/eval.py
@@ -59,7 +62,7 @@ Environment variables (all test or developer hooks, never set in normal use):
 | `FocusMode.swift`, `CommandPalette.swift`, `Menus.swift`, `SettingsWindow.swift`, `About.swift`, `WorkspaceCustomizer.swift`, `Updater.swift` | Lock In HUD, palette, native menus, Settings tabs, About, workspace icon picker, GitHub release updater |
 | `SelfTest.swift`, `SnapshotTool.swift` | headless test harness and size snapshots |
 
-Other folders: `ml/` (dictation model data and eval), `ideas/` (gitignored parked ideas), `handoffs/` (gitignored session handoffs), `.github/workflows/release.yml` (build, self test and publish on every push to `main`), `.github/workflows/ci.yml` (build and self test on PRs and non-main pushes), `scripts/selftest.sh`.
+Other folders: `docs/img/` (README images), `scripts/dmg/` (DMG background, volume icon source), `ml/` (dictation model data and eval), `ideas/` (gitignored parked ideas), `handoffs/` (gitignored session handoffs), `.github/workflows/release.yml` (build, self test and publish Panels.dmg on every push to `main`; version is the next patch after the latest release, starting at 1.0.0; the website and the updater both download that dmg), `.github/workflows/ci.yml` (build and self test on PRs and non-main pushes), `scripts/selftest.sh`.
 
 ## Architecture rules that matter
 
