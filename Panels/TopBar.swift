@@ -179,8 +179,18 @@ struct TopBar: View {
     private var rightCluster: some View {
         HStack(spacing: 2) {
             IconMenu(symbol: "rectangle.3.group", help: "Layouts") {
+                Section("Auto Tile") {
+                    ForEach(TileLayout.allCases) { layout in
+                        Button { ws.setTiling(layout) } label: {
+                            if ws.space.tiling == layout { Label(layout.label, systemImage: "checkmark") } else { Label(layout.label, systemImage: layout.symbol) }
+                        }
+                    }
+                    if ws.space.tiling != nil { Button { ws.setTiling(nil) } label: { Label("Turn Off", systemImage: "hand.draw") } }
+                }
+                Section("Fixed Layouts") {
                 ForEach(LayoutPreset.allCases) { preset in
                     Button { ws.apply(preset) } label: { Label(preset.label, systemImage: preset.symbol) }
+                }
                 }
                 Divider()
                 Button { ws.equalize() } label: { Label("Even Out Sizes", systemImage: "equal.square") }

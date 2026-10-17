@@ -79,6 +79,28 @@ enum CursorStyle: String, Codable, CaseIterable, Identifiable {
     var label: String { rawValue.capitalized }
 }
 
+enum NoteAlign: String, Codable, CaseIterable, Identifiable {
+    case left, center, right, justify
+    var id: String { rawValue }
+    var label: String { rawValue.capitalized }
+    var symbol: String {
+        switch self {
+        case .left: return "text.alignleft"
+        case .center: return "text.aligncenter"
+        case .right: return "text.alignright"
+        case .justify: return "text.justify"
+        }
+    }
+    var ns: NSTextAlignment {
+        switch self {
+        case .left: return .left
+        case .center: return .center
+        case .right: return .right
+        case .justify: return .justified
+        }
+    }
+}
+
 enum DropZone: Equatable {
     case left, right, top, bottom, center
 }
@@ -119,6 +141,13 @@ struct PanelSettings: Codable, Equatable {
     var startCommand: String = ""
     var optionAsMeta: Bool = true
     var cursorBlink: Bool = true
+    var noteCaret: CursorStyle = .bar
+    var caretWidth: Double = 2
+    var noteCaretBlink: Bool = true
+    var caretSmooth: Bool = true
+    var textAlign: NoteAlign = .left
+    var showToolbar: Bool = true
+    var hideMarks: Bool = true
     var scrollbackLines: Int = 5000
     var zoom: Double = 1.0
     var mobileUA: Bool = false
@@ -138,7 +167,7 @@ struct PanelSettings: Codable, Equatable {
     var timerSound: Bool = true
 
     enum CodingKeys: String, CodingKey {
-        case accent, surface, padding, font, fontFamily, fontSize, lineHeight, measure, wrap, richStyling, spellcheck, showStats, noteMode, typewriter, dimParagraphs, autoTitle, paragraphSpacing, headingScale, codeScale, termFontSize, cursor, shell, termOpacity, termFont, termLineHeight, startDirectory, startCommand, optionAsMeta, cursorBlink, scrollbackLines, zoom, mobileUA, showAddressBar, customCSS, forceDark, blockTrackers, appMode, isolatedSession, refreshMinutes, siteID, hideDone, focusMinutes, breakMinutes, longBreakMinutes, sessionsBeforeLong, timerSound
+        case accent, surface, padding, font, fontFamily, fontSize, lineHeight, measure, wrap, richStyling, spellcheck, showStats, noteMode, typewriter, dimParagraphs, autoTitle, paragraphSpacing, headingScale, codeScale, termFontSize, cursor, shell, termOpacity, termFont, termLineHeight, startDirectory, startCommand, optionAsMeta, cursorBlink, noteCaret, caretWidth, noteCaretBlink, caretSmooth, textAlign, showToolbar, hideMarks, scrollbackLines, zoom, mobileUA, showAddressBar, customCSS, forceDark, blockTrackers, appMode, isolatedSession, refreshMinutes, siteID, hideDone, focusMinutes, breakMinutes, longBreakMinutes, sessionsBeforeLong, timerSound
     }
 
     init() {}
@@ -177,6 +206,13 @@ struct PanelSettings: Codable, Equatable {
         startCommand = v(.startCommand, startCommand)
         optionAsMeta = v(.optionAsMeta, optionAsMeta)
         cursorBlink = v(.cursorBlink, cursorBlink)
+        noteCaret = v(.noteCaret, noteCaret)
+        caretWidth = v(.caretWidth, caretWidth)
+        noteCaretBlink = v(.noteCaretBlink, noteCaretBlink)
+        caretSmooth = v(.caretSmooth, caretSmooth)
+        textAlign = v(.textAlign, textAlign)
+        showToolbar = v(.showToolbar, showToolbar)
+        hideMarks = v(.hideMarks, hideMarks)
         scrollbackLines = v(.scrollbackLines, scrollbackLines)
         zoom = v(.zoom, zoom)
         mobileUA = v(.mobileUA, mobileUA)
@@ -377,6 +413,9 @@ final class Space: Identifiable, Codable {
     var symbol: String { didSet { Persistence.markDirty() } }
     var tint: AccentID { didSet { Persistence.markDirty() } }
     var themeID: String? { didSet { Persistence.markDirty() } }
+    /// nil means fully manual. Otherwise panels are rearranged automatically when they are added or removed.
+    var tiling: TileLayout? { didSet { Persistence.markDirty() } }
+    @ObservationIgnored var tileSignature = ""
 
     init(name: String, root: Node, symbol: String = "square.grid.2x2", tint: AccentID = .theme, themeID: String? = nil) {
         id = UUID()
@@ -388,7 +427,7 @@ final class Space: Identifiable, Codable {
         focusedID = root.leaves().first?.panel?.id
     }
 
-    enum CodingKeys: String, CodingKey { case id, name, root, focusedID, symbol, tint, themeID }
+    enum CodingKeys: String, CodingKey { case id, name, root, focusedID, symbol, tint, themeID, tiling }
 
     required init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -399,6 +438,7 @@ final class Space: Identifiable, Codable {
         symbol = (try? c.decode(String.self, forKey: .symbol)) ?? "square.grid.2x2"
         tint = (try? c.decode(AccentID.self, forKey: .tint)) ?? .theme
         themeID = try? c.decodeIfPresent(String.self, forKey: .themeID)
+        tiling = try? c.decodeIfPresent(TileLayout.self, forKey: .tiling)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -410,6 +450,7 @@ final class Space: Identifiable, Codable {
         try c.encode(symbol, forKey: .symbol)
         try c.encode(tint, forKey: .tint)
         try c.encodeIfPresent(themeID, forKey: .themeID)
+        try c.encodeIfPresent(tiling, forKey: .tiling)
     }
 
     var panels: [Panel] { root.leaves().compactMap { $0.panel } }
@@ -500,6 +541,8 @@ final class Workspace {
     var activeSpaceID: UUID
     var paletteOpen = false
     var onboardingOpen = false
+    @ObservationIgnored var contentSize = CGSize(width: 1100, height: 700)
+    @ObservationIgnored var maxContentOverride: CGSize?
     var toast: String?
     var draggingID: UUID?
     var popouts: [Popout] = []
@@ -605,7 +648,7 @@ final class Workspace {
 
     @discardableResult
     func addPanel(_ kind: PanelKind, url: String = "", title: String? = nil, text: String = "",
-                  settings: PanelSettings? = nil) -> Panel {
+                  settings: PanelSettings? = nil) -> Panel? {
         let s = space
         let panel = Panel(kind: kind, title: title, text: text, url: url, settings: settings ?? PanelSettings())
         if kind == .web && url.isEmpty { panel.url = "" }
@@ -616,6 +659,11 @@ final class Workspace {
                 insert(panel, beside: target, axis: autoAxis(for: target), before: false, in: s)
             }
             s.zoomedID = nil
+        }
+        if !fits(s) {
+            removeWithoutUndo(panel.id, from: s)
+            showNoRoom()
+            return nil
         }
         focus(panel.id, grabFirstResponder: false)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { Runtime.shared.makeFirstResponder(for: panel.id) }
@@ -628,10 +676,12 @@ final class Workspace {
         let s = space
         guard let target = s.root.leaf(for: panelID) else { return }
         let panel = Panel(kind: kind)
+        s.tiling = nil   // choosing a direction yourself means you want to place it
         withAnimation(Motion.layout) {
             insert(panel, beside: target, axis: axis, before: false, in: s)
             s.zoomedID = nil
         }
+        if !fits(s) { removeWithoutUndo(panel.id, from: s); showNoRoom(); return }
         focus(panel.id, grabFirstResponder: false)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { Runtime.shared.makeFirstResponder(for: panel.id) }
         Persistence.markDirty()
@@ -646,6 +696,7 @@ final class Workspace {
         withAnimation(Motion.layout) {
             insert(copy, beside: target, axis: autoAxis(for: target), before: false, in: s)
         }
+        if !fits(s) { removeWithoutUndo(copy.id, from: s); showNoRoom(); return }
         focus(copy.id, grabFirstResponder: false)
         Persistence.markDirty()
     }
@@ -670,6 +721,7 @@ final class Workspace {
             target.children = before ? [newLeaf, old] : [old, newLeaf]
             target.weights = [1, 1]
         }
+        retile(s, force: true)
     }
 
     func close(_ panelID: UUID) {
@@ -697,6 +749,7 @@ final class Workspace {
                 s.root.normalize()
             }
             if s.zoomedID == panelID { s.zoomedID = nil }
+            retile(s, force: true)
         }
         Runtime.shared.release(panelID)
         Sound.play(.close)
@@ -727,6 +780,7 @@ final class Workspace {
                     return
                 }
                 guard let newTarget = s.root.leaf(for: targetID) else { return }
+                s.tiling = nil   // docking to an edge is a manual placement
                 let axis: SplitAxis = (zone == .left || zone == .right) ? .horizontal : .vertical
                 let before = (zone == .left || zone == .top)
                 insert(src, beside: newTarget, axis: axis, before: before, in: s)
@@ -739,6 +793,7 @@ final class Workspace {
     }
 
     func equalize() {
+        if space.tiling != nil { retile(force: true); return }
         func walk(_ n: Node) {
             n.weights = Array(repeating: 1, count: n.children.count)
             n.children.forEach(walk)
@@ -757,6 +812,7 @@ final class Workspace {
 
     func apply(_ preset: LayoutPreset) {
         let s = space
+        s.tiling = nil
         var pool = s.panels
         func build(_ shape: Shape) -> Node {
             switch shape {
@@ -790,6 +846,7 @@ final class Workspace {
         let n = spaces.count + 1
         let panel = Panel(kind: .note, title: "Untitled")
         let s = Space(name: "Space \(n)", root: Node(panel: panel))
+        s.tiling = .balanced   // new workspaces arrange themselves; turn it off to place panels by hand
         withAnimation(Motion.swap) {
             spaces.append(s)
             activeSpaceID = s.id

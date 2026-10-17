@@ -13,10 +13,10 @@ Panels is a windowless macOS workspace app: resizable, dockable panels that hold
 xcodebuild -project Panels.xcodeproj -scheme Panels -configuration Debug -derivedDataPath build build
 open build/Build/Products/Debug/Panels.app
 
-# release build (what CI ships)
+# release build (what CI ships). Project pins Release to -Osize: -O crashed swiftc (LLVM dominance error)
 xcodebuild -project Panels.xcodeproj -scheme Panels -configuration Release -derivedDataPath build MARKETING_VERSION=1.0.0 build
 
-# headless self test: 100 checks, prints PASS or FAIL lines, exits. Always use a scratch data dir.
+# headless self test: 189 checks, prints PASS or FAIL lines, exits. Always use a scratch data dir.
 mkdir -p /tmp/panels-selftest-data && PANELS_SELFTEST=1 PANELS_DATA_DIR=/tmp/panels-selftest-data PANELS_TIMER_SPEED=60 \
   PANELS_SELFTEST_LOG=/tmp/panels-selftest.log build/Build/Products/Debug/Panels.app/Contents/MacOS/Panels
 cat /tmp/panels-selftest.log   # last line is ALL PASSED or N FAILED
@@ -44,11 +44,12 @@ Environment variables (all test or developer hooks, never set in normal use):
 | `Persistence.swift`, `AppPaths.swift` | JSON snapshot save/load (autosave every 1.2 s), data folder (`PANELS_DATA_DIR` aware) |
 | `Runtime.swift` | Caches live objects per panel id (terminal controller, web controller, note editor host, timer model) so layout changes never kill sessions |
 | `PanelSize.swift` | size classes (tiny, small, regular, roomy), per kind minimums, split sizing with minimums; `\.panelSize` and `\.panelDims` environment |
+| `Tiling.swift` | auto tiling: `TileLayout` (balanced, main, columns, rows, spiral), `TileEngine` (pure layout builder, fit aware grid), `Workspace` extension: `setTiling`, `retile`, swap and resize by keyboard. `Space.tiling` nil = manual. Edge docking and explicit split turn it off |
 | `Components.swift` | Theme environment key, `HostContainer` (reparent-safe native view host), window configuration and traffic light metrics (`WindowChrome`), `Motion` animation constants, buttons and setting controls, `Prompt` |
 | `RootView.swift`, `TopBar.swift`, `LayoutViews.swift`, `PanelChrome.swift` | window shell, workspace tabs, split layout and dividers and drag/drop docking, panel frame + header + settings popover + `PanelBodyView` |
 | `NotePanel.swift`, `MarkdownEditor.swift`, `Writing.swift` | notes: preview renderer and parser, NSTextView editor with live styling, wiki links, snippets, outline, HTML/PDF export, find |
 | `TerminalEmulator.swift`, `TerminalView.swift` | from-scratch VT emulator, PTY controller, NSView renderer |
-| `WebPanel.swift`, `Sites.swift` | `WKWebView` controller (tweaks, app mode, isolated sessions, blockers), site library, settings router, site editor |
+| `WebPanel.swift`, `WebSupport.swift`, `Sites.swift` | `WKWebView` controller (tweaks, app mode, isolated sessions, blockers), site library, settings router, site editor; WebSupport: downloads, site permissions, JS dialogs, download strip |
 | `TasksTimerPanels.swift` | tasks panel, `TimerModel` and the adaptive timer view |
 | `Theme.swift`, `ThemeStore.swift` | built-in themes, `Appearance`, density, custom theme store and editor |
 | `Sound.swift`, `SoundSettingsView.swift` | synthesized UI/typing/ambient sound engine and settings |
@@ -68,6 +69,10 @@ Other folders: `ml/` (dictation model data and eval), `ideas/` (gitignored parke
 - **Persistence** is JSON in `AppPaths.dir` (`workspace.json`, `sites.json`, `templates.json`, `themes.json`, `snippets.json`). Preferences live in `UserDefaults` (appearance, sound, dictation).
 - **Animation constants** come from `Motion` (they honor Reduce Motion). Do not scatter literals for structural animations.
 - **Sound hooks**: call `Sound.play(.cue)` for UI events and `Sound.type(kind)` from key handlers. Sound is optional and off by default.
+- **Size classes**: `PanelView` reads its own size class from `@State` fed by a GeometryReader (an environment value set inside its own body does not reach itself). Children read `\.panelSize`.
+- **Note editor caret is custom**: `PanelTextView` draws its own caret on a layer (shape, thickness, blink, smooth glide; `caretRect()` is tested) and its own placeholder. The system caret is disabled (`drawInsertionPoint` no-op) because it spans the whole line box. Markdown symbols collapse to a 0.1 pt font off the active lines when `hideMarks` is on (`EditorStyle.activeLines`). The toolbar (`NoteToolbar`) and Cmd B/I/E all go through `PanelTextView.apply(_ NoteFormat)`.
+- **Hard panel minimums**: `PanelSize.minimum(for:)` (note 440x320, tasks 340x280, terminal 480x280, web 520x360, timer 300x220; chosen so each panel's content fits without clipping, checked by the `minsize-*.png` snapshots; the timer switches to its compact layout below 340 pt tall). The window minimum (`RootView.windowMin`) grows to what the active workspace needs (`Workspace.requiredContentSize`), dividers cannot cross a child's minimum, and `addPanel`, `split` and `duplicate` refuse (toast, rollback) when the result would not fit the screen. The required size must never depend on the current window size (that fed back and grew the window to 38000 pt once); it uses only the panels and the screen. `addPanel` returns `Panel?`.
+- **Windows at launch**: only the main window may open. About is `.defaultLaunchBehavior(.suppressed)` and nothing restores. The window minimum size is set from AppKit after layout (`RootView.applyWindowMin`), never through a SwiftUI frame that tracks model state (that crashed with a layout pass abort). Web pages cannot open windows without a user gesture.
 - **Closing things is undoable**: any close of a panel, workspace or pop-out must `pushClosed(...)`. `Cmd Shift T` reopens the last one.
 
 ## Design rules

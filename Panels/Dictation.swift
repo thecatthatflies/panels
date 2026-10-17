@@ -277,7 +277,7 @@ final class DictationController {
                 }
             }
         } catch {
-            fail("Dictation could not start: \(error.localizedDescription)")
+            fail("Dictation could not start. Try again.")
         }
     }
 

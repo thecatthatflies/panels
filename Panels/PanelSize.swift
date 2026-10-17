@@ -14,13 +14,15 @@ enum PanelSize: Int, Comparable {
         return .roomy
     }
 
-    /// Smallest size each panel kind should be given by layout code.
+    /// Hard minimum for each panel kind. Layout never goes below it: the window grows to fit, and adding a panel
+    /// that cannot fit on screen is refused.
     static func minimum(for kind: PanelKind) -> CGSize {
         switch kind {
-        case .note, .tasks: CGSize(width: 160, height: 110)
-        case .terminal: CGSize(width: 200, height: 110)
-        case .web: CGSize(width: 200, height: 130)
-        case .timer: CGSize(width: 150, height: 90)
+        case .note: CGSize(width: 440, height: 320)
+        case .tasks: CGSize(width: 340, height: 280)
+        case .terminal: CGSize(width: 480, height: 280)
+        case .web: CGSize(width: 520, height: 360)
+        case .timer: CGSize(width: 300, height: 220)
         }
     }
 }
@@ -40,12 +42,17 @@ extension EnvironmentValues {
 }
 
 private struct PanelSizeReader: ViewModifier {
-    @State private var dims = CGSize(width: 400, height: 300)
+    /// Reads the size the parent gives this view (not the size of its content), then forces the content into
+    /// exactly that size. Without this, content with a wide minimum overflows its slot, gets centered and
+    /// clipped, and the size class is computed from the overflowing width instead of the real slot.
     func body(content: Content) -> some View {
-        content
-            .onGeometryChange(for: CGSize.self) { $0.size } action: { dims = $0 }
-            .environment(\.panelDims, dims)
-            .environment(\.panelSize, PanelSize.classify(dims))
+        GeometryReader { geo in
+            content
+                .frame(width: geo.size.width, height: geo.size.height)
+                .clipped()
+                .environment(\.panelDims, geo.size)
+                .environment(\.panelSize, PanelSize.classify(geo.size))
+        }
     }
 }
 
@@ -68,6 +75,20 @@ extension Node {
 }
 
 enum SplitFit {
+    /// New pixel sizes after dragging the divider between child `i` and `i + 1` by `translation`.
+    /// Works on the sizes as drawn (not on raw weights, which can differ once minimums lift a child), so the
+    /// divider follows the cursor exactly and stops when either side reaches its minimum.
+    static func drag(sizes: [CGFloat], index i: Int, translation: CGFloat, minLeft: CGFloat, minRight: CGFloat) -> [CGFloat] {
+        guard i >= 0, i + 1 < sizes.count else { return sizes }
+        let lo = min(minLeft - sizes[i], 0)          // furthest the divider can move toward the left child
+        let hi = max(sizes[i + 1] - minRight, 0)     // furthest toward the right child
+        let delta = Swift.min(Swift.max(translation, lo), hi)
+        var out = sizes
+        out[i] += delta
+        out[i + 1] -= delta
+        return out
+    }
+
     /// Turns weights into pixel sizes that add up to `total` while keeping each at or above its minimum.
     /// If the minimums cannot all fit, they are scaled down evenly (the best we can do without collapsing).
     static func sizes(weights: [Double], mins: [CGFloat], total: CGFloat) -> [CGFloat] {

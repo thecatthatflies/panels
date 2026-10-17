@@ -66,11 +66,8 @@ struct SplitContainer: View {
     @Environment(\.theme) private var theme
     private let appearance = Appearance.shared
 
-    @State private var startWeights: [Double]?
+    @State private var startSizes: [CGFloat]?
     @State private var activeDivider: Int?
-
-    private let minHorizontal: CGFloat = 190
-    private let minVertical: CGFloat = 120
 
     var body: some View {
         GeometryReader { geo in
@@ -103,10 +100,10 @@ struct SplitContainer: View {
                             DragGesture(minimumDistance: 1, coordinateSpace: .global)
                                 .onChanged { value in
                                     drag(index: i, translation: horizontal ? value.translation.width : value.translation.height,
-                                         total: total, horizontal: horizontal)
+                                         currentSizes: sizes)
                                 }
                                 .onEnded { _ in
-                                    startWeights = nil
+                                    startSizes = nil
                                     activeDivider = nil
                                     Persistence.markDirty()
                                 }
@@ -134,26 +131,18 @@ struct SplitContainer: View {
         return out
     }
 
-    private func drag(index i: Int, translation: CGFloat, total: CGFloat, horizontal: Bool) {
-        if startWeights == nil {
-            startWeights = safeWeights()
+    private func drag(index i: Int, translation: CGFloat, currentSizes: [CGFloat]) {
+        if startSizes == nil {
+            startSizes = currentSizes
             activeDivider = i
         }
-        guard let start = startWeights, i + 1 < start.count else { return }
-        let sum = start.reduce(0, +)
-        let unit = sum / Double(total)                       // weight per pixel
-        let minPx = Double(horizontal ? minHorizontal : minVertical)
-        let leftPx = start[i] / unit
-        let rightPx = start[i + 1] / unit
-        var lo = -(leftPx - minPx)
-        var hi = rightPx - minPx
-        if lo > 0 { lo = 0 }
-        if hi < 0 { hi = 0 }
-        let delta = min(max(Double(translation), lo), hi)
-        var w = start
-        w[i] = start[i] + delta * unit
-        w[i + 1] = start[i + 1] - delta * unit
-        node.weights = w
+        guard let start = startSizes, i + 1 < start.count else { return }
+        let gap = CGFloat(appearance.gap)
+        let axis = node.axis
+        let minLeft = node.children[i].minExtent(along: axis, gap: gap)
+        let minRight = node.children[i + 1].minExtent(along: axis, gap: gap)
+        let sizes = SplitFit.drag(sizes: start, index: i, translation: translation, minLeft: minLeft, minRight: minRight)
+        node.weights = sizes.map { Double(max($0, 1)) }
     }
 
     private func balance(index i: Int) {

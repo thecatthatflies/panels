@@ -1,9 +1,41 @@
 import SwiftUI
 import AppKit
+import WebKit
 
 /// Headless self test. Launch with PANELS_SELFTEST=1 (and PANELS_DATA_DIR pointing at a scratch folder).
 /// It exercises the real model, runtime and views in-process, writes PASS or FAIL lines to
 /// PANELS_SELFTEST_LOG (default /tmp/panels-selftest.log) and then quits. It never runs in normal use.
+import Network
+
+/// One-shot HTTP server on loopback that serves a body as an attachment.
+final class LoopbackServer {
+    private let listener: NWListener
+    private let port: UInt16
+
+    var url: URL { URL(string: "http://127.0.0.1:\(port)/file")! }
+
+    init(body: String, filename: String) {
+        var chosen: NWListener?
+        var p: UInt16 = 0
+        while chosen == nil {
+            p = UInt16.random(in: 20000...40000)
+            chosen = try? NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: p)!)
+        }
+        listener = chosen!
+        port = p
+        listener.newConnectionHandler = { conn in
+            conn.start(queue: .global())
+            conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { _, _, _, _ in
+                let head = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"\(filename)\"\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+                conn.send(content: head.data(using: .utf8), completion: .contentProcessed { _ in conn.cancel() })
+            }
+        }
+        listener.start(queue: .global())
+    }
+
+    func stop() { listener.cancel() }
+}
+
 enum SelfTest {
     static var enabled: Bool { ProcessInfo.processInfo.environment["PANELS_SELFTEST"] == "1" }
 
@@ -69,6 +101,11 @@ enum SelfTest {
         testTaskRemoval()
         testOnboarding()
         testDictationGate()
+        testSiteZoom()
+        testTiling()
+        testNoteEditing()
+        testHardMinimums()
+        testDividerDrag()
     }
 
     // MARK: helpers
@@ -138,8 +175,8 @@ enum SelfTest {
         let ws = Workspace.shared
         check("starts with welcome workspace", ws.spaces.count >= 1 && treeOK(ws))
         let before = ws.space.panels.count
-        let a = ws.addPanel(.note, title: "A")
-        let b = ws.addPanel(.terminal)
+        let a = ws.addPanel(.note, title: "A")!
+        let b = ws.addPanel(.terminal)!
         ws.split(a.id, axis: .vertical, kind: .tasks)
         check("add and split keep the tree valid", ws.space.panels.count == before + 3 && treeOK(ws))
         ws.equalize()
@@ -178,7 +215,7 @@ enum SelfTest {
     @MainActor
     private static func testReopenStack() async {
         let ws = Workspace.shared
-        let p = ws.addPanel(.note, title: "ReopenMe", text: "keep this text")
+        let p = ws.addPanel(.note, title: "ReopenMe", text: "keep this text")!
         let before = ws.space.panels.count
         ws.close(p.id)
         check("close removes the panel", ws.space.panels.count == before - 1 && ws.closedStack.count >= 1)
@@ -198,7 +235,7 @@ enum SelfTest {
     @MainActor
     private static func testPopouts() async {
         let ws = Workspace.shared
-        let p = ws.addPanel(.tasks, title: "PopMe")
+        let p = ws.addPanel(.tasks, title: "PopMe")!
         ws.popOut(p.id)
         check("pop out moves the panel to a window", ws.popouts.contains { $0.panel.id == p.id } && !ws.space.panels.contains { $0.id == p.id } && treeOK(ws))
         await sleep(0.3)
@@ -347,7 +384,83 @@ enum SelfTest {
         let removed = await js("document.getElementById('panels-css') ? 'present' : 'gone'")
         check("clearing tweaks removes the style", removed == "gone", removed)
         check("address normalization", WebController.normalize("example.com")?.absoluteString == "https://example.com"
-              && WebController.normalize("two words")?.host == "duckduckgo.com")
+              && WebController.normalize("two words")?.host == "www.google.com")
+
+        // find in page
+        wc.webView.loadHTMLString("<html><body><p>alpha beta gamma</p></body></html>", baseURL: nil)
+        _ = await waitUntil(8) { !wc.webView.isLoading }
+        await sleep(0.3)
+        wc.findText = "beta"; wc.find()
+        _ = await waitUntil(3) { wc.findFound != nil }
+        check("find in page finds a match", wc.findFound == true)
+        wc.findText = "zzzz"; wc.find()
+        _ = await waitUntil(3) { wc.findFound == false }
+        check("find in page reports no match", wc.findFound == false)
+        wc.findOpen = true; wc.closeFind()
+        check("closing find resets state", !wc.findOpen && wc.findFound == nil)
+
+        // pdf export
+        let pdf: Data? = await withCheckedContinuation { cont in
+            wc.webView.createPDF { r in cont.resume(returning: try? r.get()) }
+        }
+        check("page can be exported to PDF", (pdf?.count ?? 0) > 100 && pdf?.prefix(4) == Data("%PDF".utf8))
+
+        // user agent carries a Safari token
+        let ua = await js("navigator.userAgent")
+        check("user agent has a Safari token", ua.contains("Safari/605.1.15") && ua.contains("Version/"), ua)
+
+        // popups become new web panels built from WebKit's configuration
+        let before = Workspace.shared.space.panels.count
+        let knownIDs = Set(Workspace.shared.space.panels.map(\.id))
+        let popupView = wc.makePopup(configuration: WKWebViewConfiguration())
+        let popupPanel = Workspace.shared.space.panels.first { !knownIDs.contains($0.id) }
+        check("popup opens a new web panel", Workspace.shared.space.panels.count == before + 1 && popupPanel?.kind == .web, "before \(before) after \(Workspace.shared.space.panels.count) kind \(String(describing: popupPanel?.kind))")
+        if let pp = popupPanel {
+            check("popup uses the web view WebKit asked for", Runtime.shared.web(for: pp).webView === popupView)
+            Workspace.shared.close(pp.id)
+            Runtime.shared.release(pp.id)
+        }
+
+        // downloads go to the download folder with unique names
+        let dlDir = FileManager.default.temporaryDirectory.appendingPathComponent("panels-dl-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dlDir, withIntermediateDirectories: true)
+        DownloadFolder.override = dlDir
+                var started: DownloadItem?
+        let server = LoopbackServer(body: "hello", filename: "served.txt")
+        wc.startDownload(URLRequest(url: server.url)) { started = $0 }
+        _ = await waitUntil(8) { started?.finished == true }
+        check("download finishes and lands in the folder", started?.finished == true
+              && (started?.destination.map { FileManager.default.fileExists(atPath: $0.path) } ?? false),
+              started?.destination?.lastPathComponent ?? "no item")
+        check("download uses the server filename and unique names", started?.destination?.lastPathComponent == "served.txt"
+              && DownloadFolder.uniqueURL(for: "served.txt").lastPathComponent == "served 2.txt")
+        server.stop()
+        DownloadFolder.override = nil
+        try? FileManager.default.removeItem(at: dlDir)
+
+        // remembered permissions
+        SitePermissions.shared.remember(host: "selftest.example", .camera, allow: true)
+        check("permission answer is remembered", SitePermissions.shared.answer(host: "selftest.example", .camera) == true)
+        SitePermissions.shared.reset(host: "selftest.example")
+        check("permission reset clears it", SitePermissions.shared.answer(host: "selftest.example", .camera) == nil)
+
+        // error page copy
+        let page = WebDialogs.errorPage(for: NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotFindHost), url: URL(string: "https://nope.example"))
+        check("error page names the host", page.contains("nope.example") && !page.contains("\u{2014}"))
+
+        // passkey probe (information only; real sign in needs the Apple browser entitlement)
+        wc.webView.loadHTMLString("<html><body>probe</body></html>", baseURL: URL(string: "https://example.com"))
+        _ = await waitUntil(8) { !wc.webView.isLoading }
+        let probe = await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
+            wc.webView.callAsyncJavaScript("""
+            if (!window.PublicKeyCredential) { return 'no PublicKeyCredential'; }
+            const p = await Promise.race([PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().then(String).catch(e => 'error ' + e.name), new Promise(r => setTimeout(() => r('timeout'), 3000))]);
+            return 'PublicKeyCredential present, platform authenticator: ' + p;
+            """, arguments: [:], in: nil, in: .page) { r in
+                switch r { case .success(let v): cont.resume(returning: "\(v ?? "nil")"); case .failure(let e): cont.resume(returning: "js error \(e.localizedDescription)") }
+            }
+        }
+        log("INFO  passkey probe: \(probe)")
         Runtime.shared.release(panel.id)
     }
 
@@ -423,6 +536,229 @@ enum SelfTest {
         await sleep(0.3)
         check("switching every pack and turning sound off is safe", true)
         settings.prefs = saved
+    }
+
+    @MainActor
+    private static func testTiling() {
+        let min = CGSize(width: 180, height: 110)
+        check("balanced grid: 6 panels in a wide window make 3 by 2", TileEngine.gridRows(count: 6, size: CGSize(width: 900, height: 600), gap: 8, minimum: min) == [3, 3])
+        check("balanced grid: 6 panels with terminals in a small window still make 3 by 2",
+              TileEngine.gridRows(count: 6, size: CGSize(width: 884, height: 584), gap: 8, minimum: CGSize(width: 200, height: 110)) == [3, 3])
+        check("balanced grid: 2 panels in a wide window sit side by side", TileEngine.gridRows(count: 2, size: CGSize(width: 1000, height: 500), gap: 8, minimum: min) == [2])
+        check("balanced grid: 2 panels in a tall window stack", TileEngine.gridRows(count: 2, size: CGSize(width: 400, height: 900), gap: 8, minimum: min) == [1, 1])
+        check("balanced grid: 5 panels never use more columns than fit", (TileEngine.gridRows(count: 5, size: CGSize(width: 760, height: 500), gap: 8, minimum: min).max() ?? 9) <= 3)
+
+        for layout in TileLayout.allCases {
+            for n in [1, 2, 3, 5, 8] {
+                let ps = (0..<n).map { _ in Panel(kind: .note) }
+                let root = TileEngine.build(panels: ps, layout: layout, size: CGSize(width: 1000, height: 650), gap: 8)
+                root.normalize()
+                let got = root.leaves().compactMap { $0.panel?.id }
+                var ids: [UUID] = []
+                check("tile \(layout.rawValue) with \(n): every panel once, in order, valid tree",
+                      got == ps.map(\.id) && validate(root, &ids))
+            }
+        }
+
+        let ws = Workspace.shared
+        let before = ws.spaces.count
+        ws.newSpace()
+        check("new workspaces start with auto tiling", ws.space.tiling == .balanced && ws.spaces.count == before + 1)
+        for _ in 0..<4 { ws.addPanel(.note) }
+        check("auto tile keeps a valid tree while adding panels", ws.space.panels.count == 5 && treeOK(ws))
+        ws.close(ws.space.panels[2].id)
+        check("auto tile re-arranges after a close", ws.space.panels.count == 4 && treeOK(ws) && ws.space.tiling == .balanced)
+
+        ws.setTiling(.columns)
+        check("columns layout puts everything in one row", ws.space.root.axis == .horizontal && ws.space.root.children.count == 4)
+        let order = ws.space.panels.map(\.id)
+        ws.space.focusedID = order[0]
+        ws.frames = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($1, CGRect(x: CGFloat($0) * 100, y: 0, width: 90, height: 100)) })
+        ws.swapFocused(.right)
+        let swapped = ws.space.panels.map(\.id)
+        check("swap moves the focused panel one place", swapped[0] == order[1] && swapped[1] == order[0] && swapped.count == order.count)
+
+        ws.contentSize = CGSize(width: 3000, height: 900)
+        let w0 = ws.space.root.weights
+        ws.space.focusedID = swapped[0]
+        ws.resizeFocused(.horizontal, grow: true)
+        check("resize grows the focused panel and shrinks a neighbour", ws.space.root.weights[0] > w0[0] && ws.space.root.weights[1] < w0[1]
+              && abs(ws.space.root.weights.reduce(0, +) - w0.reduce(0, +)) < 0.0001)
+
+        for _ in 0..<40 { ws.resizeFocused(.horizontal, grow: false) }
+        let rw = ws.space.root.weights, rs = rw.reduce(0, +)
+        let rGap = CGFloat(Appearance.shared.gap)
+        let rTotal = ws.layoutArea(ws.contentSize).width - rGap * CGFloat(rw.count - 1)
+        let rMin = ws.space.root.children[0].minExtent(along: .horizontal, gap: rGap)
+        check("keyboard resize stops at the panel minimum", CGFloat(rw[0] / rs) * rTotal >= rMin - 1, "\(CGFloat(rw[0] / rs) * rTotal) vs \(rMin)")
+
+        let edgeTarget = ws.space.panels[2]
+        ws.move(ws.space.panels[0].id, onto: edgeTarget.id, zone: .right)
+        check("docking to an edge switches auto tiling off", ws.space.tiling == nil && treeOK(ws))
+
+        let space = Space(name: "T", root: Node(panel: Panel(kind: .note)))
+        space.tiling = .spiral
+        let data = try! JSONEncoder().encode(space)
+        let back = try! JSONDecoder().decode(Space.self, from: data)
+        check("tiling layout survives save and load", back.tiling == .spiral)
+        var obj = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
+        obj.removeValue(forKey: "tiling")
+        let legacy = try! JSONDecoder().decode(Space.self, from: JSONSerialization.data(withJSONObject: obj))
+        check("old workspaces without a tiling field stay manual", legacy.tiling == nil)
+    }
+
+    @MainActor
+    private static func testDividerDrag() {
+        let sizes: [CGFloat] = [500, 300, 200]
+        let a = SplitFit.drag(sizes: sizes, index: 0, translation: 100, minLeft: 280, minRight: 240)
+        check("divider follows the cursor", a == [600, 200, 200] || a == [560, 240, 200], "\(a)")
+        let b = SplitFit.drag(sizes: sizes, index: 0, translation: -400, minLeft: 280, minRight: 240)
+        check("divider stops when the left panel reaches its minimum", b[0] == 280 && b[1] == 520 && b.reduce(0, +) == 1000, "\(b)")
+        let c = SplitFit.drag(sizes: sizes, index: 1, translation: 400, minLeft: 240, minRight: 200)
+        check("divider stops when the right panel reaches its minimum", c[2] == 200 && c[1] == 300 && b.reduce(0, +) == c.reduce(0, +), "\(c)")
+        let d = SplitFit.drag(sizes: [250, 300], index: 0, translation: -50, minLeft: 280, minRight: 240)
+        check("a panel already under its minimum cannot be squashed further", d[0] == 250, "\(d)")
+        let e = SplitFit.drag(sizes: [250, 300], index: 0, translation: 40, minLeft: 280, minRight: 240)
+        check("a panel under its minimum can be pulled back up", e[0] == 290 && e[1] == 260, "\(e)")
+    }
+
+    @MainActor
+    private static func testHardMinimums() {
+        for k in PanelKind.allCases {
+            let m = PanelSize.minimum(for: k)
+            check("\(k.rawValue) panel minimum is at least 300 by 220", m.width >= 300 && m.height >= 220, "\(m)")
+        }
+        let ws = Workspace.shared
+        ws.newSpace()
+        let s = ws.space
+        ws.maxContentOverride = CGSize(width: 1400, height: 900)
+        for _ in 0..<3 { ws.addPanel(.note) }
+        ws.contentSize = CGSize(width: 900, height: 600)
+        let a = ws.requiredContentSize(for: s)
+        ws.contentSize = CGSize(width: 30000, height: 600)
+        let b = ws.requiredContentSize(for: s)
+        check("required window size does not depend on the current window size", a == b, "\(a) vs \(b)")
+        check("required window size stays within the screen when it fits", a.width <= 1400 && a.height <= 900 && ws.fits(s))
+        check("required window size is not a thin strip", a.width / a.height < 3 && a.height / a.width < 3, "\(a)")
+
+        // small screen: keep adding until refused, never past the screen
+        ws.maxContentOverride = CGSize(width: 1000, height: 700)
+        var added = 0
+        while ws.addPanel(.note) != nil, added < 20 { added += 1 }
+        check("adding stops when panels would drop under their minimum", added < 20 && ws.space.panels.count >= 1 && ws.fits(ws.space), "added \(added)")
+        let need = ws.requiredContentSize(for: ws.space)
+        check("after a refusal the layout still fits the screen", need.width <= 1000.5 && need.height <= 700.5 && treeOK(ws), "\(need)")
+
+        // with room, the balanced grid keeps every cell at its minimum
+        let ps = (0..<5).map { _ in Panel(kind: .note) }
+        let area = CGSize(width: 1000, height: 700)
+        let rows = TileEngine.gridRows(count: 5, size: area, gap: 8, minimum: TileEngine.minimum(for: ps))
+        let cols = rows.max() ?? 1
+        let cellW = (area.width - 8 * CGFloat(cols - 1)) / CGFloat(cols)
+        let cellH = (area.height - 8 * CGFloat(rows.count - 1)) / CGFloat(rows.count)
+        check("balanced grid keeps cells above the minimum when it can", cellW >= 280 && cellH >= 200, "\(rows) \(cellW)x\(cellH)")
+        ws.maxContentOverride = nil
+    }
+
+    @MainActor
+    private static func testNoteEditing() {
+        func makeHost(_ text: String, _ mutate: (inout PanelSettings) -> Void = { _ in }) -> (Panel, NoteEditorHost, NSWindow) {
+            var st = PanelSettings()
+            st.lineHeight = 1.9
+            mutate(&st)
+            let panel = Panel(kind: .note, text: text, settings: st)
+            let host = Runtime.shared.noteHost(for: panel)
+            let win = NSWindow(contentRect: NSRect(x: -5000, y: -5000, width: 500, height: 400), styleMask: [.borderless], backing: .buffered, defer: false)
+            host.scrollView.frame = NSRect(x: 0, y: 0, width: 500, height: 400)
+            win.contentView = host.scrollView
+            host.apply(settings: st, theme: .granite)
+            host.scrollView.layoutSubtreeIfNeeded()
+            win.makeFirstResponder(host.textView)
+            return (panel, host, win)
+        }
+
+        // caret is sized to the font, not the tall line box
+        let (p1, h1, w1) = makeHost("Hello world")
+        h1.textView.setSelectedRange(NSRange(location: 5, length: 0))
+        let font = h1.textView.baseFont
+        let rect = h1.textView.caretRect()
+        let lineRect = h1.textView.layoutManager!.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil)
+        check("caret height matches the font, not the line box",
+              rect != nil && abs(rect!.height - (font.ascender - font.descender)) < 1 && rect!.height < lineRect.height - 4,
+              "caret \(rect?.height ?? 0) font \(font.ascender - font.descender) line \(lineRect.height)")
+        let glyphLoc = h1.textView.layoutManager!.location(forGlyphAt: 0)
+        check("extra line spacing sits above the text (caret placement assumption)",
+              abs(glyphLoc.y - (lineRect.height - abs(font.descender))) < 2, "baseline \(glyphLoc.y) expected \(lineRect.height - abs(font.descender))")
+        if let r = rect {
+            let top = h1.textView.textContainerOrigin.y + lineRect.minY + glyphLoc.y - font.ascender
+            check("caret sits on the text baseline", abs(r.minY - top) < 1)
+        }
+        h1.apply(settings: { var s = p1.settings; s.noteCaret = .block; return s }(), theme: .granite)
+        h1.textView.setSelectedRange(NSRange(location: 1, length: 0))
+        check("block caret is as wide as a character", (h1.textView.caretRect()?.width ?? 0) > 4)
+        h1.apply(settings: { var s = p1.settings; s.noteCaret = .underline; return s }(), theme: .granite)
+        check("underline caret is thin", (h1.textView.caretRect()?.height ?? 99) <= 3)
+        let (_, hEmpty, wEmpty) = makeHost("")
+        check("caret can be placed in an empty note", hEmpty.textView.caretRect() != nil)
+        check("empty note has a placeholder", !hEmpty.textView.placeholder.isEmpty)
+        Runtime.shared.release(p1.id); w1.contentView = nil; wEmpty.contentView = nil
+
+        // alignment reaches every paragraph, headings included
+        let (p2, h2, w2) = makeHost("# Title\n\nbody text") { $0.textAlign = .center }
+        let st2 = h2.textView.textStorage!
+        let a0 = (st2.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.alignment
+        let a1 = (st2.attribute(.paragraphStyle, at: st2.length - 1, effectiveRange: nil) as? NSParagraphStyle)?.alignment
+        check("text alignment applies to headings and body", a0 == .center && a1 == .center)
+        Runtime.shared.release(p2.id); w2.contentView = nil
+
+        // markdown symbols hide off the active line and show on it
+        let (p3, h3, w3) = makeHost("# Title\nsome **bold** text")
+        h3.textView.setSelectedRange(NSRange(location: 2, length: 0))
+        let ns3 = h3.textView.string as NSString
+        let hashSize = (h3.textView.textStorage!.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize ?? 99
+        let starIdx = ns3.range(of: "**").location
+        let starSize = (h3.textView.textStorage!.attribute(.font, at: starIdx, effectiveRange: nil) as? NSFont)?.pointSize ?? 99
+        check("symbols stay visible on the active line", hashSize > 4, "\(hashSize)")
+        check("symbols hide on other lines", starSize < 1, "\(starSize)")
+        h3.textView.setSelectedRange(NSRange(location: starIdx + 4, length: 0))
+        let hashAfter = (h3.textView.textStorage!.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize ?? 99
+        let starAfter = (h3.textView.textStorage!.attribute(.font, at: starIdx, effectiveRange: nil) as? NSFont)?.pointSize ?? 0
+        check("symbols swap when the caret moves lines", hashAfter < 1 && starAfter > 4, "hash \(hashAfter) star \(starAfter)")
+        check("hidden symbols do not change the text", h3.textView.string == "# Title\nsome **bold** text" && p3.text == "# Title\nsome **bold** text")
+        Runtime.shared.release(p3.id); w3.contentView = nil
+
+        // toolbar formatting
+        let (p4, h4, w4) = makeHost("one\ntwo\nthree") { $0.hideMarks = false }
+        let tv = h4.textView
+        tv.setSelectedRange(NSRange(location: 0, length: 3))
+        tv.apply(.bold)
+        check("bold wraps the selection", tv.string.hasPrefix("**one**"), tv.string)
+        tv.apply(.bold)
+        check("bold again takes it off", tv.string.hasPrefix("one\n"), tv.string)
+        tv.setSelectedRange(NSRange(location: 0, length: (tv.string as NSString).length))
+        tv.apply(.bullet)
+        check("bullet list on every selected line", tv.string == "- one\n- two\n- three", tv.string)
+        tv.apply(.bullet)
+        check("bullet again takes it off", tv.string == "one\ntwo\nthree", tv.string)
+        tv.apply(.numbered)
+        check("numbered list counts up", tv.string == "1. one\n2. two\n3. three", tv.string)
+        tv.apply(.heading(2))
+        check("heading replaces the list prefix", tv.string == "## one\n## two\n## three", tv.string)
+        tv.apply(.heading(0))
+        check("normal text removes the heading", tv.string == "one\ntwo\nthree", tv.string)
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        tv.apply(.checklist)
+        check("checklist on one line", tv.string.hasPrefix("- [ ] one\ntwo"), tv.string)
+        Runtime.shared.release(p4.id); w4.contentView = nil
+    }
+
+    @MainActor
+    private static func testSiteZoom() {
+        let z = SiteZoom.shared
+        z.remember(host: "Example.COM", zoom: 1.5)
+        check("site zoom is remembered per host, ignoring case", z.zoom(host: "example.com") == 1.5 && z.zoom(host: "other.com") == nil)
+        z.remember(host: "example.com", zoom: 1)
+        check("zoom back to 100 percent clears the entry", z.zoom(host: "example.com") == nil)
     }
 
     @MainActor

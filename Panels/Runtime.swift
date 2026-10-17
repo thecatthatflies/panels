@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import WebKit
 
 /// Keeps live, non-serializable objects (shells, web views, editors, timers) alive
 /// independently of SwiftUI view identity so layout changes never kill a session.
@@ -22,9 +23,9 @@ final class Runtime {
         return t
     }
 
-    func web(for panel: Panel) -> WebController {
+    func web(for panel: Panel, configuration: WKWebViewConfiguration? = nil) -> WebController {
         if let w = webs[panel.id] { return w }
-        let w = WebController(panel: panel)
+        let w = WebController(panel: panel, configuration: configuration)
         let id = panel.id
         w.webView.onFocus = { Workspace.shared.focus(id, grabFirstResponder: false) }
         webs[id] = w

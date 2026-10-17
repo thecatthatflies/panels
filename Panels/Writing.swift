@@ -152,7 +152,7 @@ extension Workspace {
                 return
             }
         }
-        let p = addPanel(.note, title: title, text: "# \(title)\n\n")
+        guard let p = addPanel(.note, title: title, text: "# \(title)\n\n") else { return }
         p.settings.autoTitle = false
         showToast("Created \(title)")
     }

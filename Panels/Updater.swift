@@ -124,13 +124,13 @@ final class Updater: NSObject, URLSessionDownloadDelegate {
     private func handleFeed(data: Data?, response: URLResponse?, error: Error?) {
         lastChecked = Date()
         if let error {
-            state = userInitiated ? .failed("Could not reach GitHub: \(error.localizedDescription)") : .idle
+            state = userInitiated ? .failed("Could not check for updates. Check your internet connection and try again.") : .idle
             return
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         if status == 404 { state = .upToDate; return }
         guard status == 200, let data, let release = Self.parse(data) else {
-            state = userInitiated ? .failed("Unexpected response from GitHub (\(status)).") : .idle
+            state = userInitiated ? .failed("Could not check for updates right now. Try again in a moment.") : .idle
             return
         }
         if Version.compare(release.version, currentVersion) == .orderedDescending {
@@ -179,7 +179,7 @@ final class Updater: NSObject, URLSessionDownloadDelegate {
             try fm.createDirectory(at: out, withIntermediateDirectories: true)
             try fm.moveItem(at: location, to: zip)
         } catch {
-            state = .failed("Could not store the download: \(error.localizedDescription)")
+            state = .failed("Could not save the update. Make sure your disk has room and try again.")
             return
         }
 
@@ -189,7 +189,7 @@ final class Updater: NSObject, URLSessionDownloadDelegate {
             p.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
             p.arguments = ["-x", "-k", zip.path, out.path]
             do { try p.run() } catch {
-                DispatchQueue.main.async { self.state = .failed("Could not unpack the update.") }
+                DispatchQueue.main.async { self.state = .failed("Could not open the update. Try again.") }
                 return
             }
             p.waitUntilExit()
@@ -198,7 +198,7 @@ final class Updater: NSObject, URLSessionDownloadDelegate {
                 .filter { $0.pathExtension == "app" } ?? []
             DispatchQueue.main.async {
                 guard p.terminationStatus == 0, let app = apps.first, self.isValidBundle(app) else {
-                    self.state = .failed("The downloaded update was not a valid Panels build.")
+                    self.state = .failed("The update did not download correctly. Try again.")
                     return
                 }
                 self.state = .ready(release, app)
@@ -211,7 +211,7 @@ final class Updater: NSObject, URLSessionDownloadDelegate {
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error, task is URLSessionDownloadTask {
-            state = .failed("Download failed: \(error.localizedDescription)")
+            state = .failed("Could not download the update. Check your internet connection and try again.")
         }
     }
 
@@ -267,7 +267,7 @@ final class Updater: NSObject, URLSessionDownloadDelegate {
             try script.write(to: scriptURL, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
         } catch {
-            state = .failed("Could not prepare the installer.")
+            state = .failed("Could not install the update. Try again.")
             return
         }
 
@@ -278,7 +278,7 @@ final class Updater: NSObject, URLSessionDownloadDelegate {
         p.standardError = FileHandle.nullDevice
         p.standardInput = FileHandle.nullDevice
         do { try p.run() } catch {
-            state = .failed("Could not start the installer.")
+            state = .failed("Could not install the update. Try again.")
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { NSApp.terminate(nil) }
@@ -317,7 +317,7 @@ struct UpdatePill: View {
         case .installing:
             pill(symbol: "arrow.triangle.2.circlepath", text: "Installing") {}
         case .failed(let message) where !message.isEmpty && updater.lastChecked != nil && isActionable(message):
-            pill(symbol: "exclamationmark.triangle", text: "Update problem") { Workspace.shared.showToast(message) }
+            pill(symbol: "exclamationmark.triangle", text: "Update failed") { Workspace.shared.showToast(message) }
         default:
             EmptyView()
         }

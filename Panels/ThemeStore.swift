@@ -122,7 +122,7 @@ final class ThemeStore {
             guard response == .OK, let url = op.url else { return }   // cancel does nothing
             guard let self, let data = try? Data(contentsOf: url),
                   var spec = try? JSONDecoder().decode(CustomThemeSpec.self, from: data) else {
-                Workspace.shared.showToast("That file is not a Panels theme")
+                Workspace.shared.showToast("That is not a Panels theme file. Choose a different one.")
                 return
             }
             spec.id = "custom-" + UUID().uuidString.prefix(8).lowercased()

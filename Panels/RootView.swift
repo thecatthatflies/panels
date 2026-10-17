@@ -5,6 +5,27 @@ struct RootView: View {
     private let ws = Workspace.shared
     private let appearance = Appearance.shared
 
+    /// The window never shrinks below what the panels in the active workspace need.
+    private var windowMin: CGSize {
+        let need = ws.requiredContentSize(for: ws.space)
+        let zoomed = ws.space.zoomedID != nil || ws.focusMode
+        let bar = ws.focusMode ? 0 : WindowChrome.barHeight
+        return CGSize(width: zoomed ? 760 : max(760, need.width), height: zoomed ? 500 : max(500, need.height + bar))
+    }
+
+    /// Sets the window's minimum from AppKit, after layout. Doing it through a SwiftUI min frame made SwiftUI
+    /// resize the window during its own layout pass, which could loop and abort.
+    private func applyWindowMin(_ need: CGSize) {
+        DispatchQueue.main.async {
+            guard let w = WindowChrome.mainWindow else { return }
+            if w.contentMinSize != need { w.contentMinSize = need }
+            let size = w.contentRect(forFrameRect: w.frame).size
+            if size.width < need.width - 0.5 || size.height < need.height - 0.5 {
+                w.setContentSize(NSSize(width: max(size.width, need.width), height: max(size.height, need.height)))
+            }
+        }
+    }
+
     var body: some View {
         let theme = appearance.theme(for: ws.space)
         let locked = ws.focusMode
@@ -80,6 +101,7 @@ struct RootView: View {
         .background(WindowConfigurator())
         .ignoresSafeArea()
         .frame(minWidth: 760, minHeight: 500)
+        .onChange(of: windowMin, initial: true) { _, need in applyWindowMin(need) }
         .animation(.smooth(duration: 0.5), value: locked)
         .animation(.snappy(duration: 0.22), value: ws.paletteOpen)
         .animation(.snappy(duration: 0.22), value: ws.onboardingOpen)
@@ -134,6 +156,7 @@ struct SpaceContent: View {
         }
         .padding(.horizontal, side)
         .padding(.bottom, locked ? 0 : gap + 2)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { ws.contentSizeChanged($0) }
         .id(s.id)
     }
 }

@@ -80,13 +80,19 @@ struct PanelsCommands: Commands {
         // MARK: Edit
         CommandGroup(after: .textEditing) {
             Menu("Find") {
-                Button("Find...") { FindOps.perform(1) }
-                    .keyboardShortcut("f", modifiers: .command)
+                Button("Find...") {
+                    if let p = ws.focused, p.kind == .web { Runtime.shared.web(for: p).openFind() } else { FindOps.perform(1) }
+                }
+                .keyboardShortcut("f", modifiers: .command)
                 Button("Find and Replace...") { FindOps.perform(12) }
                     .keyboardShortcut("f", modifiers: [.command, .option])
-                Button("Find Next") { FindOps.perform(2) }
+                Button("Find Next") {
+                    if let p = ws.focused, p.kind == .web { Runtime.shared.web(for: p).find() } else { FindOps.perform(2) }
+                }
                     .keyboardShortcut("g", modifiers: .command)
-                Button("Find Previous") { FindOps.perform(3) }
+                Button("Find Previous") {
+                    if let p = ws.focused, p.kind == .web { Runtime.shared.web(for: p).find(backwards: true) } else { FindOps.perform(3) }
+                }
                     .keyboardShortcut("g", modifiers: [.command, .shift])
                 Button("Use Selection for Find") { FindOps.perform(7) }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
@@ -119,6 +125,15 @@ struct PanelsCommands: Commands {
             Button("Actual Size") { ws.resetSize() }
                 .keyboardShortcut("0", modifiers: .command)
             Divider()
+            Menu("Auto Tile") {
+                ForEach(TileLayout.allCases) { layout in
+                    Button { ws.setTiling(layout) } label: {
+                        if ws.space.tiling == layout { Label(layout.label, systemImage: "checkmark") } else { Label(layout.label, systemImage: layout.symbol) }
+                    }
+                }
+                Divider()
+                Button("Off") { ws.setTiling(nil) }.disabled(ws.space.tiling == nil)
+            }
             Menu("Layout") {
                 ForEach(LayoutPreset.allCases) { preset in
                     Button { ws.apply(preset) } label: { Label(preset.label, systemImage: preset.symbol) }
@@ -197,6 +212,24 @@ struct PanelsCommands: Commands {
                 .keyboardShortcut(.upArrow, modifiers: [.command, .option])
             Button("Focus Down") { ws.focusDirection(.down) }
                 .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+            Divider()
+            Button("Swap Left") { ws.swapFocused(.left) }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .option, .shift])
+            Button("Swap Right") { ws.swapFocused(.right) }
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .option, .shift])
+            Button("Swap Up") { ws.swapFocused(.up) }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option, .shift])
+            Button("Swap Down") { ws.swapFocused(.down) }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option, .shift])
+            Divider()
+            Button("Wider") { ws.resizeFocused(.horizontal, grow: true) }
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .control])
+            Button("Narrower") { ws.resizeFocused(.horizontal, grow: false) }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .control])
+            Button("Taller") { ws.resizeFocused(.vertical, grow: true) }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .control])
+            Button("Shorter") { ws.resizeFocused(.vertical, grow: false) }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .control])
         }
 
         // MARK: Workspace
@@ -275,6 +308,12 @@ struct PanelsCommands: Commands {
             }
             .keyboardShortcut("l", modifiers: .command)
             .disabled(focusedKind != .web)
+            Divider()
+            Button("Print Page...") { if let p = ws.focused, p.kind == .web { Runtime.shared.web(for: p).printPage() } }
+                .keyboardShortcut("p", modifiers: .command)
+                .disabled(focusedKind != .web)
+            Button("Save Page as PDF...") { if let p = ws.focused, p.kind == .web { Runtime.shared.web(for: p).savePDF() } }
+                .disabled(focusedKind != .web)
             Divider()
             Button("Save Page as Site") { if let p = ws.focused, p.kind == .web { let s = sites.saveSite(from: p); ws.showToast("Saved \(s.name)") } }
                 .disabled(focusedKind != .web)

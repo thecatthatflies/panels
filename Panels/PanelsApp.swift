@@ -23,6 +23,9 @@ struct PanelsApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
+        // Only the main window opens at launch. About and Settings open when you ask for them, never from restored state.
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
 
         Settings {
             SettingsView()

@@ -103,9 +103,8 @@ final class SiteLibrary {
 
 extension Workspace {
     @discardableResult
-    func openSite(_ site: Site) -> Panel {
-        let panel = addPanel(.web, url: site.url, title: site.name, settings: SiteLibrary.shared.panelSettings(for: site))
-        return panel
+    func openSite(_ site: Site) -> Panel? {
+        addPanel(.web, url: site.url, title: site.name, settings: SiteLibrary.shared.panelSettings(for: site))
     }
 }
 

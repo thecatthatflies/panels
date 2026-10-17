@@ -6,10 +6,12 @@ import AppKit
 struct PanelView: View {
     @Bindable var panel: Panel
     @Environment(\.theme) private var theme
-    @Environment(\.panelSize) private var size
     private let ws = Workspace.shared
     private let appearance = Appearance.shared
 
+    /// Size class of this panel's slot. PanelView reads it from its own GeometryReader (an environment value set
+    /// inside body would not reach PanelView itself, only its children).
+    @State private var size: PanelSize = .regular
     @State private var hovering = false
     @State private var showSettings = false
     @State private var renaming = false
@@ -28,6 +30,18 @@ struct PanelView: View {
     private var surfaceColor: Color { panel.kind == .terminal ? Color(hex: theme.termBackground) : theme.surfaceC }
 
     var body: some View {
+        GeometryReader { geo in
+            framed
+                .frame(width: geo.size.width, height: geo.size.height)
+                .clipped()
+                .environment(\.panelDims, geo.size)
+                .environment(\.panelSize, PanelSize.classify(geo.size))
+                .onChange(of: PanelSize.classify(geo.size), initial: true) { _, v in size = v }
+        }
+    }
+
+    @ViewBuilder
+    private var framed: some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
 
         VStack(spacing: 0) {
@@ -46,7 +60,6 @@ struct PanelView: View {
         .overlay { dragLayer(shape) }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ws.frames[panel.id] = $0 }
         .onHover { hovering = $0 }
-        .measuresPanelSize()
         .animation(Motion.quick, value: isFocused)
         .scaleEffect(appeared ? 1 : 0.985)
         .opacity(appeared ? 1 : 0)
@@ -172,32 +185,42 @@ struct PanelView: View {
 
     /// One menu that holds every header action, for panels too small for the full button row.
     private var overflowMenu: some View {
-        Menu {
-            if panel.kind == .note || panel.kind == .terminal {
-                Button("Dictate", systemImage: "mic") { DictationController.shared.toggle(for: panel) }
-            }
-            Menu("Split Right", systemImage: "rectangle.split.2x1") { splitMenu(axis: .horizontal) }
-            Menu("Split Down", systemImage: "rectangle.split.1x2") { splitMenu(axis: .vertical) }
-            Button("Panel Settings", systemImage: "slider.horizontal.3") { showSettings = true }
-            Button(isZoomed ? "Restore" : "Zoom", systemImage: "arrow.up.left.and.arrow.down.right") { ws.toggleZoom(panel.id) }
-            Button("Pop Out", systemImage: "arrow.up.forward.square") { ws.popOut(panel.id) }
-            Divider()
-            Button("Close", systemImage: "xmark", role: .destructive) { ws.close(panel.id) }
-        } label: {
+        Button { showOverflow() } label: {
             Image(systemName: size == .tiny ? "circle.fill" : "ellipsis")
                 .font(.system(size: size == .tiny ? 7 : 11, weight: .semibold))
                 .foregroundStyle(size == .tiny ? accent : theme.mutedC)
                 .frame(width: size == .tiny ? 14 : 22, height: 20)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.button)
         .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .frame(width: size == .tiny ? 14 : 22, height: 20)
         .help("Panel actions")
         .popover(isPresented: $showSettings, arrowEdge: .bottom) {
             PanelSettingsView(panel: panel).environment(\.theme, theme)
         }
+    }
+
+    /// A plain AppKit menu, so the button keeps its small size (a SwiftUI Menu sizes itself to its widest item).
+    private func showOverflow() {
+        let menu = NSMenu()
+        if panel.kind == .note || panel.kind == .terminal {
+            menu.addItem(ClosureMenuItem(title: "Dictate") { DictationController.shared.toggle(for: panel) })
+        }
+        for (title, axis) in [("Split Right", SplitAxis.horizontal), ("Split Down", SplitAxis.vertical)] {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            for kind in PanelKind.allCases {
+                sub.addItem(ClosureMenuItem(title: kind.label) { ws.split(panel.id, axis: axis, kind: kind) })
+            }
+            item.submenu = sub
+            menu.addItem(item)
+        }
+        menu.addItem(ClosureMenuItem(title: "Panel Settings") { showSettings = true })
+        menu.addItem(ClosureMenuItem(title: isZoomed ? "Restore" : "Zoom") { ws.toggleZoom(panel.id) })
+        menu.addItem(ClosureMenuItem(title: "Pop Out") { ws.popOut(panel.id) })
+        menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem(title: "Close") { ws.close(panel.id) })
+        guard let event = NSApp.currentEvent, let view = event.window?.contentView else { return }
+        NSMenu.popUpContextMenu(menu, with: event, for: view)
     }
 
     private var dragPreview: some View {
@@ -457,11 +480,29 @@ struct PanelSettingsView: View {
                     .tint(accent)
             }
         }
+        SettingsSection(title: "Paragraph") {
+            SettingRow(label: "Alignment") {
+                SegmentedChips(options: NoteAlign.allCases, selection: $panel.settings.textAlign,
+                               label: { $0.label }, tint: accent)
+            }
+        }
+        SettingsSection(title: "Cursor") {
+            SettingRow(label: "Shape") {
+                SegmentedChips(options: CursorStyle.allCases, selection: $panel.settings.noteCaret,
+                               label: { $0 == .bar ? "Line" : $0.label }, tint: accent)
+            }
+            SliderRow(label: "Line thickness", value: $panel.settings.caretWidth, range: 1...5, step: 0.5,
+                      format: { String(format: "%.1f", $0) }, tint: accent)
+            ToggleRow(label: "Blink", isOn: $panel.settings.noteCaretBlink, tint: accent)
+            ToggleRow(label: "Smooth movement", isOn: $panel.settings.caretSmooth, tint: accent)
+        }
         SettingsSection(title: "Editor") {
             SettingRow(label: "View") {
                 SegmentedChips(options: NoteMode.allCases, selection: $panel.settings.noteMode,
                                label: { $0.label }, tint: accent)
             }
+            ToggleRow(label: "Show formatting toolbar", isOn: $panel.settings.showToolbar, tint: accent)
+            ToggleRow(label: "Hide markdown symbols", isOn: $panel.settings.hideMarks, tint: accent)
             ToggleRow(label: "Style markdown as you type", isOn: $panel.settings.richStyling, tint: accent)
             ToggleRow(label: "Title from first heading", isOn: $panel.settings.autoTitle, tint: accent)
             ToggleRow(label: "Typewriter scrolling", isOn: $panel.settings.typewriter, tint: accent)

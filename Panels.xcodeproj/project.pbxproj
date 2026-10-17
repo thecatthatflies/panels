@@ -169,7 +169,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
-				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_OPTIMIZATION_LEVEL = "-Osize";
 			};
 			name = Release;
 		};
@@ -186,6 +186,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Panels;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Panels uses your camera only when a web page you opened asks for it and you allow it.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Panels shares your location only when a web page you opened asks for it and you allow it.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Panels listens to your microphone only while you are dictating. Audio is processed on this Mac.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Panels turns your speech into text on this Mac while you dictate.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -215,6 +217,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Panels;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Panels uses your camera only when a web page you opened asks for it and you allow it.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Panels shares your location only when a web page you opened asks for it and you allow it.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Panels listens to your microphone only while you are dictating. Audio is processed on this Mac.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Panels turns your speech into text on this Mac while you dictate.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";

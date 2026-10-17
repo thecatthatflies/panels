@@ -115,6 +115,14 @@ struct CommandPalette: View {
         }
         out.append(PaletteItem(id: "equalize", title: "Even Out Sizes", subtitle: "Give every panel equal room",
                                symbol: "equal.square", keywords: "balance resize reset", shortcut: "Cmd Option =") { ws.equalize() })
+        for layout in TileLayout.allCases {
+            out.append(PaletteItem(id: "tile-\(layout.rawValue)", title: "Auto Tile: \(layout.label)", subtitle: layout.blurb,
+                                   symbol: layout.symbol, keywords: "tile arrange grid auto layout columns rows spiral main", shortcut: nil) { ws.setTiling(layout) })
+        }
+        if ws.space.tiling != nil {
+            out.append(PaletteItem(id: "tile-off", title: "Auto Tile: Off", subtitle: "Place panels yourself",
+                                   symbol: "hand.draw", keywords: "manual tiling off", shortcut: nil) { ws.setTiling(nil) })
+        }
         for preset in LayoutPreset.allCases {
             out.append(PaletteItem(id: "layout-\(preset.rawValue)", title: "Layout: \(preset.label)", subtitle: "Rearrange the current space",
                                    symbol: preset.symbol, keywords: "arrange preset grid", shortcut: nil) { ws.apply(preset) })

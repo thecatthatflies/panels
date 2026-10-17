@@ -124,7 +124,7 @@ struct GeneralSettings: View {
                     HStack(spacing: 8) {
                         Button { FileOps.revealDataFolder() } label: { Label("Show Data in Finder", systemImage: "folder") }
                     }
-                    Text("Workspaces, notes, sites and templates are stored as plain JSON in Application Support.")
+                    Text("Your workspaces, notes, sites and templates are saved on this Mac. Show them in Finder to back them up.")
                         .font(Typo.ui(11.5)).foregroundStyle(theme.faintC)
                 }
             }
@@ -276,6 +276,7 @@ struct SettingsWindowSizer: NSViewRepresentable {
         let v = NSView()
         DispatchQueue.main.async {
             guard let w = v.window else { return }
+            w.isRestorable = false
             w.contentMinSize = NSSize(width: 780, height: 560)
             let size = w.contentLayoutRect.size
             if size.width < 860 || size.height < 620 {

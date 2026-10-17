@@ -18,6 +18,15 @@ struct EditorStyle: Equatable {
     var paragraphGap: CGFloat = 0.2
     var headingScale: CGFloat = 1
     var codeScale: CGFloat = 0.88
+    var align: NSTextAlignment = .left
+    var hideMarks = false
+    /// Full lines the caret or selection touches. Their markdown symbols stay visible so they can be edited.
+    var activeLines: NSRange?
+
+    /// Attributes for a markdown symbol: dimmed, or collapsed to nothing when symbols are hidden off the active line.
+    func markAttrs(hidden: Bool) -> [NSAttributedString.Key: Any] {
+        hidden ? [.foregroundColor: NSColor.clear, .font: NSFont.systemFont(ofSize: 0.1)] : [.foregroundColor: faint]
+    }
 }
 
 // MARK: - Markdown styler
@@ -43,9 +52,12 @@ enum MarkdownStyler {
 
         storage.beginEditing()
         defer { storage.endEditing() }
+        // Runs last (defers unwind in reverse), after every paragraph style has been set.
+        defer { applyAlignment(storage, s.align) }
 
         let para = NSMutableParagraphStyle()
         para.lineHeightMultiple = s.lineHeight
+        para.alignment = s.align
         para.paragraphSpacing = s.size * s.paragraphGap
 
         let base: [NSAttributedString.Key: Any] = [
@@ -72,6 +84,7 @@ enum MarkdownStyler {
             while content.length > 0, [10, 13].contains(string.character(at: NSMaxRange(content) - 1)) { content.length -= 1 }
             let line = string.substring(with: content)
             let ls = NSRange(location: 0, length: (line as NSString).length)
+            let hideHere = s.hideMarks && !(s.activeLines.map { NSIntersectionRange($0, lineRange).length > 0 } ?? false)
 
             // blank lines get compact height so paragraph gaps stay tight
             if content.length == 0 {
@@ -109,7 +122,7 @@ enum MarkdownStyler {
                 p.paragraphSpacing = s.size * 0.25
                 storage.addAttributes([.font: s.face.bold(size), .paragraphStyle: p], range: content)
                 let marks = NSRange(location: content.location, length: m.range(at: 1).length + m.range(at: 2).length)
-                storage.addAttributes([.foregroundColor: s.faint], range: marks)
+                storage.addAttributes(s.markAttrs(hidden: hideHere), range: marks)
                 inlineStart = marks.length
             } else if rule.firstMatch(in: line, range: ls) != nil {
                 storage.addAttributes([.foregroundColor: s.faint, .kern: 3], range: content)
@@ -161,33 +174,48 @@ enum MarkdownStyler {
 
             guard inlineStart < ls.length else { continue }
             let sub = NSRange(location: inlineStart, length: ls.length - inlineStart)
-            applyInline(line: line, sub: sub, offset: content.location, storage: storage, style: s, mono: mono)
+            applyInline(line: line, sub: sub, offset: content.location, storage: storage, style: s, mono: mono, hide: hideHere)
+        }
+    }
+
+    private static func applyAlignment(_ storage: NSTextStorage, _ align: NSTextAlignment) {
+        let full = NSRange(location: 0, length: storage.length)
+        guard full.length > 0 else { return }
+        var runs: [(NSRange, NSParagraphStyle)] = []
+        storage.enumerateAttribute(.paragraphStyle, in: full, options: []) { v, r, _ in
+            if let p = v as? NSParagraphStyle, p.alignment != align { runs.append((r, p)) }
+        }
+        for (r, p) in runs {
+            let mp = p.mutableCopy() as! NSMutableParagraphStyle
+            mp.alignment = align
+            storage.addAttribute(.paragraphStyle, value: mp, range: r)
         }
     }
 
     private static func shift(_ r: NSRange, by o: Int) -> NSRange { NSRange(location: r.location + o, length: r.length) }
 
     private static func applyInline(line: String, sub: NSRange, offset: Int, storage: NSTextStorage,
-                                    style s: EditorStyle, mono: NSFont) {
+                                    style s: EditorStyle, mono: NSFont, hide: Bool) {
+        let mark = s.markAttrs(hidden: hide)
         // bold
         for m in bold.matches(in: line, range: sub) {
             restyle(storage, shift(m.range(at: 2), by: offset), bold: true, italic: false, style: s)
-            storage.addAttribute(.foregroundColor, value: s.faint, range: shift(NSRange(location: m.range.location, length: 2), by: offset))
-            storage.addAttribute(.foregroundColor, value: s.faint, range: shift(NSRange(location: NSMaxRange(m.range) - 2, length: 2), by: offset))
+            storage.addAttributes(mark, range: shift(NSRange(location: m.range.location, length: 2), by: offset))
+            storage.addAttributes(mark, range: shift(NSRange(location: NSMaxRange(m.range) - 2, length: 2), by: offset))
         }
         // italic
         for m in italic.matches(in: line, range: sub) {
             restyle(storage, shift(m.range(at: 2), by: offset), bold: false, italic: true, style: s)
-            storage.addAttribute(.foregroundColor, value: s.faint, range: shift(NSRange(location: m.range.location, length: 1), by: offset))
-            storage.addAttribute(.foregroundColor, value: s.faint, range: shift(NSRange(location: NSMaxRange(m.range) - 1, length: 1), by: offset))
+            storage.addAttributes(mark, range: shift(NSRange(location: m.range.location, length: 1), by: offset))
+            storage.addAttributes(mark, range: shift(NSRange(location: NSMaxRange(m.range) - 1, length: 1), by: offset))
         }
         // strike
         for m in strike.matches(in: line, range: sub) {
             let inner = shift(m.range(at: 1), by: offset)
             storage.addAttributes([.strikethroughStyle: NSUnderlineStyle.single.rawValue, .strikethroughColor: s.muted,
                                    .foregroundColor: s.muted], range: inner)
-            storage.addAttribute(.foregroundColor, value: s.faint, range: shift(NSRange(location: m.range.location, length: 2), by: offset))
-            storage.addAttribute(.foregroundColor, value: s.faint, range: shift(NSRange(location: NSMaxRange(m.range) - 2, length: 2), by: offset))
+            storage.addAttributes(mark, range: shift(NSRange(location: m.range.location, length: 2), by: offset))
+            storage.addAttributes(mark, range: shift(NSRange(location: NSMaxRange(m.range) - 2, length: 2), by: offset))
         }
         // wiki links between notes
         for m in wiki.matches(in: line, range: sub) {
@@ -197,7 +225,11 @@ enum MarkdownStyler {
             let exists = s.knownTitles.contains(target)
             let shown = m.range(at: 3).location != NSNotFound ? shift(m.range(at: 3), by: offset) : shift(titleR, by: offset)
             let color = exists ? s.accent : s.accent.withAlphaComponent(0.55)
-            storage.addAttribute(.foregroundColor, value: s.faint, range: whole)
+            // Only the brackets (and any "title|" before an alias) are symbols; the shown text keeps its own font.
+            let lead = NSRange(location: whole.location, length: shown.location - whole.location)
+            let tail = NSRange(location: NSMaxRange(shown), length: NSMaxRange(whole) - NSMaxRange(shown))
+            storage.addAttributes(mark, range: lead)
+            storage.addAttributes(mark, range: tail)
             storage.addAttributes([.foregroundColor: color,
                                    .underlineStyle: NSUnderlineStyle.single.union(.patternDot).rawValue,
                                    .underlineColor: color.withAlphaComponent(0.7)], range: shown)
@@ -211,7 +243,7 @@ enum MarkdownStyler {
             let close = shift(m.range(at: 5), by: offset)
             storage.addAttributes([.foregroundColor: s.accent, .underlineStyle: NSUnderlineStyle.single.rawValue,
                                    .underlineColor: s.accent.withAlphaComponent(0.5)], range: textR)
-            for r in [open, mid, url, close] { storage.addAttribute(.foregroundColor, value: s.faint, range: r) }
+            for r in [open, mid, url, close] { storage.addAttributes(mark, range: r) }
         }
         for m in bareURL.matches(in: line, range: sub) {
             let r = shift(m.range, by: offset)
@@ -229,8 +261,8 @@ enum MarkdownStyler {
             storage.addAttributes([.font: mono, .foregroundColor: s.accent,
                                    .backgroundColor: s.codeBackground, .underlineStyle: 0, .strikethroughStyle: 0], range: r)
             let tick = m.range(at: 1).length
-            storage.addAttribute(.foregroundColor, value: s.faint, range: shift(NSRange(location: m.range.location, length: tick), by: offset))
-            storage.addAttribute(.foregroundColor, value: s.faint, range: shift(NSRange(location: NSMaxRange(m.range) - tick, length: tick), by: offset))
+            storage.addAttributes(mark, range: shift(NSRange(location: m.range.location, length: tick), by: offset))
+            storage.addAttributes(mark, range: shift(NSRange(location: NSMaxRange(m.range) - tick, length: tick), by: offset))
         }
     }
 
@@ -257,6 +289,13 @@ enum MarkdownStyler {
     }
 }
 
+// MARK: - Formatting commands
+
+enum NoteFormat: Equatable {
+    case bold, italic, strike, code, link, bullet, numbered, checklist, quote, rule
+    case heading(Int)   // 0 is normal text
+}
+
 // MARK: - Text view
 
 final class PanelTextView: NSTextView {
@@ -271,6 +310,157 @@ final class PanelTextView: NSTextView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    // MARK: custom caret
+
+    /// The system caret is as tall as the whole line box (line height multiples make it huge), cannot change shape
+    /// and cannot glide. This draws our own, sized to the font, on a layer above the text.
+    var caretShape: CursorStyle = .bar { didSet { updateCaret(animated: false) } }
+    var caretWidth: CGFloat = 2 { didSet { updateCaret(animated: false) } }
+    var caretBlinks = true { didSet { restartBlink() } }
+    var caretSmooth = true
+    var caretColor: NSColor = .controlAccentColor { didSet { caretLayer.backgroundColor = caretColor.cgColor } }
+    var baseFont: NSFont = .systemFont(ofSize: 15)
+    var placeholder = ""
+    private let caretLayer = CALayer()
+    private var caretShown = false
+
+    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {}
+
+    private func ensureCaretLayer() {
+        wantsLayer = true
+        guard caretLayer.superlayer == nil, let host = layer else { return }
+        caretLayer.backgroundColor = caretColor.cgColor
+        caretLayer.zPosition = 10
+        caretLayer.opacity = 0
+        host.addSublayer(caretLayer)
+    }
+
+    /// The caret rectangle in this view's coordinates, or nil when it cannot be placed. Exposed for tests.
+    func caretRect() -> NSRect? {
+        guard let lm = layoutManager, let tc = textContainer else { return nil }
+        let ns = string as NSString
+        let len = ns.length
+        let loc = min(selectedRange().location, len)
+        let origin = textContainerOrigin
+        lm.ensureLayout(forCharacterRange: NSRange(location: max(min(loc, len) - 1, 0), length: min(2, len - max(loc - 1, 0))))
+
+        var font = baseFont
+        if len > 0 {
+            let at = loc < len ? loc : len - 1
+            if let f = textStorage?.attribute(.font, at: at, effectiveRange: nil) as? NSFont, f.pointSize > 4 { font = f }
+        }
+        let height = font.ascender - font.descender
+        var lineRect: NSRect
+        var baselineFromTop: CGFloat
+        var x: CGFloat
+        var glyphWidth: CGFloat = font.pointSize * 0.55
+        let onEmptyLine = len == 0 || (loc == len && ns.character(at: len - 1) == 10)
+        if onEmptyLine {
+            let extra = lm.extraLineFragmentRect
+            lineRect = extra.isEmpty ? NSRect(x: 0, y: 0, width: tc.size.width, height: height * 1.3) : extra
+            baselineFromTop = lineRect.height - abs(font.descender)   // extra line spacing sits above the text
+            switch (typingAttributes[.paragraphStyle] as? NSParagraphStyle)?.alignment ?? .left {
+            case .center: x = lineRect.midX
+            case .right: x = lineRect.maxX
+            default: x = lineRect.minX
+            }
+        } else {
+            let gi = lm.glyphIndexForCharacter(at: loc < len ? loc : len - 1)
+            lineRect = lm.lineFragmentRect(forGlyphAt: gi, effectiveRange: nil)
+            let gl = lm.location(forGlyphAt: gi)
+            baselineFromTop = gl.y
+            let box = lm.boundingRect(forGlyphRange: NSRange(location: gi, length: 1), in: tc)
+            if loc < len { x = lineRect.minX + gl.x; glyphWidth = max(box.width, 3) } else { x = box.maxX }
+        }
+        let top = origin.y + lineRect.minY + baselineFromTop - font.ascender
+        let left = origin.x + x
+        switch caretShape {
+        case .bar: return NSRect(x: left - caretWidth / 2 + (caretWidth > 2 ? 0 : 0), y: top, width: caretWidth, height: height)
+        case .block: return NSRect(x: left, y: top, width: glyphWidth, height: height)
+        case .underline: return NSRect(x: left, y: top + height - max(caretWidth, 2), width: glyphWidth, height: max(caretWidth, 2))
+        }
+    }
+
+    func updateCaret(animated: Bool) {
+        ensureCaretLayer()
+        guard window != nil, window?.firstResponder === self, selectedRange().length == 0, isEditable,
+              let rect = caretRect() else {
+            caretLayer.removeAllAnimations()
+            caretLayer.opacity = 0
+            caretShown = false
+            return
+        }
+        let glide = animated && caretSmooth && caretShown
+        CATransaction.begin()
+        CATransaction.setDisableActions(!glide)
+        if glide {
+            CATransaction.setAnimationDuration(0.09)
+            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+        }
+        caretLayer.frame = rect
+        caretLayer.cornerRadius = caretShape == .bar ? min(caretWidth / 2, 1.5) : 1
+        caretLayer.backgroundColor = (caretShape == .block ? caretColor.withAlphaComponent(0.4) : caretColor).cgColor
+        CATransaction.commit()
+        caretShown = true
+        restartBlink()
+    }
+
+    /// Solid while you move or type, then blinks.
+    private func restartBlink() {
+        caretLayer.removeAnimation(forKey: "blink")
+        guard caretShown else { return }
+        caretLayer.opacity = 1
+        guard caretBlinks, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let a = CAKeyframeAnimation(keyPath: "opacity")
+        a.values = [1, 0]
+        a.keyTimes = [0, 0.5]
+        a.calculationMode = .discrete
+        a.duration = 1.1
+        a.repeatCount = .infinity
+        a.beginTime = CACurrentMediaTime() + 0.5
+        a.fillMode = .backwards
+        caretLayer.add(a, forKey: "blink")
+    }
+
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        updateCaret(animated: true)
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        needsDisplay = true
+        updateCaret(animated: true)
+    }
+
+    override func layout() {
+        super.layout()
+        updateCaret(animated: false)
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok { updateCaret(animated: false) }
+        return ok
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateCaret(animated: false)
+    }
+
+    // MARK: placeholder, drawn with the real paragraph style so it lines up exactly with typed text
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard string.isEmpty, !hasMarkedText(), !placeholder.isEmpty, let tc = textContainer else { return }
+        var attrs = typingAttributes
+        attrs[.foregroundColor] = (attrs[.foregroundColor] as? NSColor)?.withAlphaComponent(0.4) ?? NSColor.tertiaryLabelColor
+        let o = textContainerOrigin
+        NSAttributedString(string: placeholder, attributes: attrs)
+            .draw(with: NSRect(x: o.x, y: o.y, width: tc.size.width, height: 400), options: [.usesLineFragmentOrigin])
+    }
+
     override func keyDown(with event: NSEvent) {
         if let kind = SoundClassify.kind(for: event) { Sound.type(kind) }
         super.keyDown(with: event)
@@ -278,7 +468,7 @@ final class PanelTextView: NSTextView {
 
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
-        if ok { onFocus?() }
+        if ok { onFocus?(); updateCaret(animated: false) }
         return ok
     }
 
@@ -441,6 +631,73 @@ final class PanelTextView: NSTextView {
         case "i": wrapSelection(open: "*", close: "*"); return true
         case "e": wrapSelection(open: "`", close: "`"); return true
         default: return super.performKeyEquivalent(with: event)
+        }
+    }
+
+    /// Toolbar and menu entry point: the same markdown edits as the shortcuts, so both stay in step.
+    func apply(_ f: NoteFormat) {
+        window?.makeFirstResponder(self)
+        switch f {
+        case .bold: wrapSelection(open: "**", close: "**")
+        case .italic: wrapSelection(open: "*", close: "*")
+        case .strike: wrapSelection(open: "~~", close: "~~")
+        case .code: wrapSelection(open: "`", close: "`")
+        case .link: insertLink()
+        case .heading(let level): setLinePrefix(level == 0 ? "" : String(repeating: "#", count: level) + " ")
+        case .bullet: setLinePrefix("- ")
+        case .numbered: setLinePrefix("1. ")
+        case .checklist: setLinePrefix("- [ ] ")
+        case .quote: setLinePrefix("> ")
+        case .rule: insertRule()
+        }
+    }
+
+    private static let blockPrefix = try! NSRegularExpression(pattern: "^(\\s*)(#{1,6}\\s+|[-*+]\\s+\\[[ xX]\\]\\s+|[-*+]\\s+|\\d{1,3}[.)]\\s+|>+\\s?)")
+
+    /// Gives every selected line the prefix, or takes it off if they all already have exactly that prefix.
+    private func setLinePrefix(_ prefix: String) {
+        let ns = string as NSString
+        let lines = ns.lineRange(for: selectedRange())
+        var out = ""
+        var allHave = !prefix.isEmpty
+        var pieces: [(String, String)] = []   // (indent, text without block prefix)
+        ns.enumerateSubstrings(in: lines, options: [.byLines, .substringNotRequired]) { _, range, enclosing, _ in
+            let line = ns.substring(with: range)
+            let lr = NSRange(location: 0, length: (line as NSString).length)
+            var indent = "", body = line
+            if let m = Self.blockPrefix.firstMatch(in: line, range: lr) {
+                indent = (line as NSString).substring(with: m.range(at: 1))
+                body = (line as NSString).substring(from: m.range.length)
+                if (line as NSString).substring(with: m.range(at: 2)) != prefix { allHave = false }
+            } else {
+                allHave = false
+            }
+            pieces.append((indent, body))
+            _ = enclosing
+        }
+        if pieces.isEmpty { pieces = [("", "")] }
+        for (i, p) in pieces.enumerated() {
+            var pre = allHave ? "" : prefix
+            if prefix == "1. " && !allHave { pre = "\(i + 1). " }
+            out += p.0 + pre + p.1 + (i < pieces.count - 1 ? "\n" : "")
+        }
+        if lines.length > 0, ns.character(at: NSMaxRange(lines) - 1) == 10 { out += "\n" }
+        if shouldChangeText(in: lines, replacementString: out) {
+            textStorage?.replaceCharacters(in: lines, with: out)
+            didChangeText()
+            setSelectedRange(NSRange(location: lines.location, length: max((out as NSString).length - ((out as NSString).hasSuffix("\n") ? 1 : 0), 0)))
+        }
+    }
+
+    private func insertRule() {
+        let sel = selectedRange()
+        let ns = string as NSString
+        let atLineStart = sel.location == 0 || ns.character(at: sel.location - 1) == 10
+        let text = (atLineStart ? "" : "\n") + "---\n"
+        if shouldChangeText(in: sel, replacementString: text) {
+            textStorage?.replaceCharacters(in: sel, with: text)
+            didChangeText()
+            setSelectedRange(NSRange(location: sel.location + (text as NSString).length, length: 0))
         }
     }
 
@@ -666,7 +923,10 @@ final class NoteEditorHost: NSObject, NSTextViewDelegate, NSTextStorageDelegate 
             knownTitles: Workspace.shared.knownNoteTitles(),
             paragraphGap: CGFloat(st.paragraphSpacing),
             headingScale: CGFloat(st.headingScale),
-            codeScale: CGFloat(st.codeScale)
+            codeScale: CGFloat(st.codeScale),
+            align: st.textAlign.ns,
+            hideMarks: st.hideMarks && st.richStyling,
+            activeLines: (st.hideMarks && st.richStyling) ? activeLineRange() : nil
         )
 
         let modeChanged = typewriter != st.typewriter || dimOthers != st.dimParagraphs
@@ -691,7 +951,15 @@ final class NoteEditorHost: NSObject, NSTextViewDelegate, NSTextStorageDelegate 
             }
         }
 
-        textView.insertionPointColor = accent
+        textView.insertionPointColor = .clear
+        textView.caretColor = accent
+        textView.caretShape = st.noteCaret
+        textView.caretWidth = CGFloat(st.caretWidth)
+        textView.caretBlinks = st.noteCaretBlink
+        textView.caretSmooth = st.caretSmooth
+        textView.baseFont = style.face.regular(style.size)
+        let hint = st.hideMarks ? "Start typing. Use the toolbar above to format." : "Start writing. Markdown works as you type."
+        if textView.placeholder != hint { textView.placeholder = hint; textView.needsDisplay = true }
         textView.selectedTextAttributes = [
             .backgroundColor: accent.withAlphaComponent(theme.isDark ? 0.30 : 0.24)
         ]
@@ -705,6 +973,7 @@ final class NoteEditorHost: NSObject, NSTextViewDelegate, NSTextStorageDelegate 
                     let p = NSMutableParagraphStyle()
                     p.lineHeightMultiple = style.lineHeight
                     p.paragraphSpacing = style.size * style.paragraphGap
+                    p.alignment = style.align
                     return p
                 }()
             ]
@@ -715,6 +984,8 @@ final class NoteEditorHost: NSObject, NSTextViewDelegate, NSTextStorageDelegate 
             }
         }
         scrollView.needsLayout = true
+        textView.needsDisplay = true
+        textView.updateCaret(animated: false)
         if modeChanged || style != lastStyle { updateDim() }
         if modeChanged && typewriter { DispatchQueue.main.async { self.centerCaret(animated: false) } }
     }
@@ -766,7 +1037,31 @@ final class NoteEditorHost: NSObject, NSTextViewDelegate, NSTextStorageDelegate 
         scrollView.reflectScrolledClipView(clip)
     }
 
+    /// Full lines the selection touches, for keeping their markdown symbols visible.
+    private func activeLineRange() -> NSRange? {
+        let ns = textView.string as NSString
+        guard ns.length > 0 else { return nil }
+        let sel = textView.selectedRange()
+        return ns.lineRange(for: NSRange(location: min(sel.location, ns.length), length: min(sel.length, ns.length - min(sel.location, ns.length))))
+    }
+
+    /// With symbols hidden, the line you are on shows them; moving to another line hides them again.
+    private func refreshActiveLines() {
+        guard var style = lastStyle, style.hideMarks else { return }
+        let now = activeLineRange()
+        guard now != style.activeLines else { return }
+        style.activeLines = now
+        lastStyle = style
+        guard let storage = textView.textStorage else { return }
+        applying = true
+        let sel = textView.selectedRange()
+        MarkdownStyler.apply(to: storage, style: style)
+        textView.setSelectedRange(sel)
+        applying = false
+    }
+
     func textViewDidChangeSelection(_ notification: Notification) {
+        refreshActiveLines()
         guard !applying else { return }
         if dimOthers { updateDim() }
         if typewriter { centerCaret() }

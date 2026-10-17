@@ -55,6 +55,27 @@ enum TrackerBlocklist {
 
 final class PanelWebView: WKWebView {
     var onFocus: (() -> Void)?
+    var onFind: (() -> Void)?
+    var onPrint: (() -> Void)?
+    var onSavePDF: (() -> Void)?
+
+    /// Renames WebKit's own items to match the app (links open in a new panel, not a window) and adds page actions.
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        super.willOpenMenu(menu, with: event)
+        for item in menu.items {
+            switch item.identifier?.rawValue {
+            case "WKMenuItemIdentifierOpenLinkInNewWindow": item.title = "Open Link in New Panel"
+            case "WKMenuItemIdentifierOpenImageInNewWindow": item.title = "Open Image in New Panel"
+            case "WKMenuItemIdentifierOpenFrameInNewWindow": item.title = "Open Frame in New Panel"
+            default: break
+            }
+        }
+        menu.addItem(.separator())
+        for (title, action) in [("Find in Page", onFind), ("Print...", onPrint), ("Save as PDF...", onSavePDF)] {
+            let item = ClosureMenuItem(title: title) { action?() }
+            menu.addItem(item)
+        }
+    }
 
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
@@ -68,8 +89,19 @@ final class PanelWebView: WKWebView {
     }
 }
 
+final class ClosureMenuItem: NSMenuItem {
+    private let handler: () -> Void
+    init(title: String, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(fire), keyEquivalent: "")
+        target = self
+    }
+    required init(coder: NSCoder) { fatalError("not used") }
+    @objc private func fire() { handler() }
+}
+
 @Observable
-final class WebController: NSObject, WKNavigationDelegate, WKUIDelegate {
+final class WebController: NSObject, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
     @ObservationIgnored let webView: PanelWebView
     @ObservationIgnored weak var panel: Panel?
     @ObservationIgnored private var observers: [NSKeyValueObservation] = []
@@ -84,19 +116,34 @@ final class WebController: NSObject, WKNavigationDelegate, WKUIDelegate {
     var isLoading = false
     var progress: Double = 0
     var pageTitle = ""
+    var downloads: [DownloadItem] = []
+    var findOpen = false
+    var findText = ""
+    /// nil before a search, then whether the last search found a match.
+    var findFound: Bool?
+
+    /// Safari style suffix so sites that sniff for Safari treat the panel as Safari.
+    static let safariToken = "Version/\(ProcessInfo.processInfo.operatingSystemVersion.majorVersion).0 Safari/605.1.15"
 
     static let mobileUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 
-    init(panel: Panel) {
+    /// `configuration` is set for popups: WebKit requires the window.open view to be built from the
+    /// configuration it hands us, which also keeps the opener's data store and the window.opener link.
+    init(panel: Panel, configuration: WKWebViewConfiguration? = nil) {
         self.panel = panel
-        let config = WKWebViewConfiguration()
-        if panel.settings.isolatedSession {
-            let ident = panel.settings.siteID ?? panel.id
-            config.websiteDataStore = WKWebsiteDataStore(forIdentifier: ident)
-        } else {
-            config.websiteDataStore = .default()
+        let config = configuration ?? WKWebViewConfiguration()
+        if configuration == nil {
+            if panel.settings.isolatedSession {
+                let ident = panel.settings.siteID ?? panel.id
+                config.websiteDataStore = WKWebsiteDataStore(forIdentifier: ident)
+            } else {
+                config.websiteDataStore = .default()
+            }
+            config.applicationNameForUserAgent = Self.safariToken
         }
         config.preferences.isElementFullscreenEnabled = true
+        // Standard popup blocking: a page can only open a window from a click or key press, never on its own.
+        config.preferences.javaScriptCanOpenWindowsAutomatically = false
         webView = PanelWebView(frame: .zero, configuration: config)
         super.init()
 
@@ -105,6 +152,9 @@ final class WebController: NSObject, WKNavigationDelegate, WKUIDelegate {
         webView.allowsBackForwardNavigationGestures = true
         webView.allowsMagnification = true
         webView.setValue(false, forKey: "drawsBackground")
+        webView.onFind = { [weak self] in self?.openFind() }
+        webView.onPrint = { [weak self] in self?.printPage() }
+        webView.onSavePDF = { [weak self] in self?.savePDF() }
 
         observers = [
             webView.observe(\.canGoBack, options: [.new]) { [weak self] v, _ in self?.canGoBack = v.canGoBack },
@@ -115,7 +165,7 @@ final class WebController: NSObject, WKNavigationDelegate, WKUIDelegate {
         ]
 
         applyTweaks(settings: panel.settings)
-        if !panel.url.isEmpty { load(panel.url) }
+        if configuration == nil, !panel.url.isEmpty { load(panel.url) }
     }
 
     deinit { refreshTimer?.invalidate() }
@@ -123,7 +173,10 @@ final class WebController: NSObject, WKNavigationDelegate, WKUIDelegate {
     // MARK: settings
 
     func apply(settings: PanelSettings) {
-        if abs(webView.pageZoom - CGFloat(settings.zoom)) > 0.001 { webView.pageZoom = CGFloat(settings.zoom) }
+        if abs(webView.pageZoom - CGFloat(settings.zoom)) > 0.001 {
+            webView.pageZoom = CGFloat(settings.zoom)
+            if let host = webView.url?.host { SiteZoom.shared.remember(host: host, zoom: settings.zoom) }
+        }
         let ua: String? = settings.mobileUA ? Self.mobileUA : nil
         if webView.customUserAgent != ua {
             webView.customUserAgent = ua
@@ -203,7 +256,7 @@ final class WebController: NSObject, WKNavigationDelegate, WKUIDelegate {
         if t.hasPrefix("http://") || t.hasPrefix("https://") || t.hasPrefix("file://") { return URL(string: t) }
         if t.hasPrefix("localhost") || t.hasPrefix("127.0.0.1") { return URL(string: "http://" + t) }
         if !t.contains(" "), t.contains(".") { return URL(string: "https://" + t) }
-        var comps = URLComponents(string: "https://duckduckgo.com/")!
+        var comps = URLComponents(string: "https://www.google.com/search")!
         comps.queryItems = [URLQueryItem(name: "q", value: t)]
         return comps.url
     }
@@ -213,6 +266,62 @@ final class WebController: NSObject, WKNavigationDelegate, WKUIDelegate {
         homeHost = url.host
         panel?.url = url.absoluteString
         webView.load(URLRequest(url: url))
+    }
+
+    // MARK: find, print, pdf
+
+    func openFind() {
+        findOpen = true
+        NotificationCenter.default.post(name: .panelsFocusFind, object: panel?.id)
+    }
+
+    func closeFind() {
+        findOpen = false
+        findFound = nil
+        webView.evaluateJavaScript("window.getSelection().removeAllRanges()", completionHandler: nil)
+        webView.window?.makeFirstResponder(webView)
+    }
+
+    func find(backwards: Bool = false) {
+        guard !findText.isEmpty else { findFound = nil; return }
+        let config = WKFindConfiguration()
+        config.backwards = backwards
+        config.wraps = true
+        config.caseSensitive = false
+        webView.find(findText, configuration: config) { [weak self] result in
+            DispatchQueue.main.async { self?.findFound = result.matchFound }
+        }
+    }
+
+    func printPage() {
+        let info = NSPrintInfo.shared.copy() as! NSPrintInfo
+        info.horizontalPagination = .fit
+        info.verticalPagination = .automatic
+        let op = webView.printOperation(with: info)
+        op.view?.frame = webView.bounds
+        if let window = webView.window {
+            op.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
+        } else {
+            op.run()
+        }
+    }
+
+    func savePDF() {
+        guard let window = webView.window else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.pdf]
+        panel.nameFieldStringValue = (pageTitle.isEmpty ? "Page" : pageTitle).replacingOccurrences(of: "/", with: "-") + ".pdf"
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            self?.webView.createPDF { result in
+                switch result {
+                case .success(let data):
+                    do { try data.write(to: url, options: .atomic); Workspace.shared.showToast("Saved \(url.lastPathComponent)") }
+                    catch { Workspace.shared.showToast("Could not save the PDF") }
+                case .failure: Workspace.shared.showToast("Could not save this page as a PDF")
+                }
+            }
+        }
     }
 
     func goBack() { webView.goBack() }
@@ -233,7 +342,13 @@ final class WebController: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     // MARK: delegate
 
-    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) { syncURL() }
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        syncURL()
+        // Each site keeps the zoom you last set on it.
+        if let host = webView.url?.host, let z = SiteZoom.shared.zoom(host: host), let panel, abs(panel.settings.zoom - z) > 0.001 {
+            panel.settings.zoom = z
+        }
+    }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         syncURL()
@@ -255,6 +370,10 @@ final class WebController: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if navigationAction.shouldPerformDownload {
+            decisionHandler(.download)
+            return
+        }
         if panel?.settings.appMode == true,
            navigationAction.navigationType == .linkActivated,
            let target = navigationAction.request.url,
@@ -267,16 +386,173 @@ final class WebController: NSObject, WKNavigationDelegate, WKUIDelegate {
         decisionHandler(.allow)
     }
 
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
+                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        let disposition = (navigationResponse.response as? HTTPURLResponse)?
+            .value(forHTTPHeaderField: "Content-Disposition")?.lowercased() ?? ""
+        if navigationResponse.isForMainFrame, disposition.hasPrefix("attachment") || !navigationResponse.canShowMIMEType {
+            decisionHandler(.download)
+        } else {
+            decisionHandler(.allow)
+        }
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        adopt(download)
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        adopt(download)
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        showError(error)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        showError(error)
+    }
+
+    private func showError(_ error: Error) {
+        let e = error as NSError
+        // Cancelled loads, and loads replaced by a download, are not failures.
+        guard e.domain == NSURLErrorDomain, e.code != NSURLErrorCancelled else { return }
+        let failing = (e.userInfo[NSURLErrorFailingURLErrorKey] as? URL) ?? webView.url
+        webView.loadHTMLString(WebDialogs.errorPage(for: e, url: failing), baseURL: failing)
+    }
+
+    func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge,
+                 completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        let method = challenge.protectionSpace.authenticationMethod
+        guard method == NSURLAuthenticationMethodHTTPBasic || method == NSURLAuthenticationMethodHTTPDigest else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        WebDialogs.credentials(host: challenge.protectionSpace.host, realm: challenge.protectionSpace.realm,
+                               webView: webView) { cred in
+            if let cred { completionHandler(.useCredential, cred) } else { completionHandler(.cancelAuthenticationChallenge, nil) }
+        }
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { webView.reload() }
+
+    // MARK: popups
+
+    /// Opens a new web panel for window.open and target=_blank. The returned view is built from `configuration`.
+    func makePopup(configuration: WKWebViewConfiguration) -> WKWebView? {
+        var st = panel?.settings ?? PanelSettings()
+        st.appMode = false
+        guard let popup = Workspace.shared.addPanel(.web, settings: st) else { return nil }
+        return Runtime.shared.web(for: popup, configuration: configuration).webView
+    }
+
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if navigationAction.targetFrame == nil, let url = navigationAction.request.url {
-            if panel?.settings.appMode == true, registrableDomain(url.host) != registrableDomain(homeHost) {
-                NSWorkspace.shared.open(url)
-            } else {
-                webView.load(URLRequest(url: url))
-            }
+        guard let url = navigationAction.request.url ?? URL(string: "about:blank") else { return nil }
+        if panel?.settings.appMode == true, url.scheme?.hasPrefix("http") == true,
+           registrableDomain(url.host) != registrableDomain(homeHost) {
+            NSWorkspace.shared.open(url)
+            return nil
         }
-        return nil
+        return makePopup(configuration: configuration)
+    }
+
+    func webViewDidClose(_ webView: WKWebView) {
+        guard let id = panel?.id else { return }
+        DispatchQueue.main.async { Workspace.shared.close(id) }
+    }
+
+    // MARK: dialogs, uploads, permissions
+
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        WebDialogs.alert(message, frame: frame, webView: webView, done: completionHandler)
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        WebDialogs.confirm(message, frame: frame, webView: webView, done: completionHandler)
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
+        WebDialogs.prompt(prompt, defaultText: defaultText, frame: frame, webView: webView, done: completionHandler)
+    }
+
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
+        let open = NSOpenPanel()
+        open.allowsMultipleSelection = parameters.allowsMultipleSelection
+        open.canChooseDirectories = parameters.allowsDirectories
+        open.canChooseFiles = true
+        if let window = webView.window {
+            open.beginSheetModal(for: window) { completionHandler($0 == .OK ? open.urls : nil) }
+        } else {
+            completionHandler(open.runModal() == .OK ? open.urls : nil)
+        }
+    }
+
+    func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+                 initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
+                 decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        WebDialogs.permission(host: origin.host, SitePermission(type), webView: webView) {
+            decisionHandler($0 ? .grant : .deny)
+        }
+    }
+
+    func resetPermissions() {
+        guard let host = webView.url?.host else { return }
+        SitePermissions.shared.reset(host: host)
+        Workspace.shared.showToast("Permissions reset for \(host)")
+    }
+
+    // MARK: downloads
+
+    private func adopt(_ download: WKDownload) {
+        download.delegate = self
+        let item = DownloadItem(name: download.originalRequest?.url?.lastPathComponent ?? "download")
+        item.download = download
+        item.observation = download.progress.observe(\.fractionCompleted, options: [.new]) { [weak item] p, _ in
+            DispatchQueue.main.async { item?.fraction = p.fractionCompleted }
+        }
+        downloads.append(item)
+    }
+
+    private func item(for download: WKDownload) -> DownloadItem? { downloads.first { $0.download === download } }
+
+    /// Starts a download without a navigation (save image, save link).
+    func startDownload(_ request: URLRequest, completion: ((DownloadItem?) -> Void)? = nil) {
+        webView.startDownload(using: request) { [weak self] download in
+            self?.adopt(download)
+            completion?(self?.item(for: download))
+        }
+    }
+
+    func cancel(_ item: DownloadItem) {
+        item.download?.cancel { _ in }
+        dismiss(item)
+    }
+
+    func dismiss(_ item: DownloadItem) { downloads.removeAll { $0.id == item.id } }
+
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String,
+                  completionHandler: @escaping (URL?) -> Void) {
+        let dest = DownloadFolder.uniqueURL(for: suggestedFilename)
+        if let it = item(for: download) { it.name = dest.lastPathComponent; it.destination = dest }
+        completionHandler(dest)
+    }
+
+    func downloadDidFinish(_ download: WKDownload) {
+        guard let it = item(for: download) else { return }
+        it.finished = true
+        it.fraction = 1
+        Workspace.shared.showToast("Downloaded \(it.name)")
+    }
+
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        guard let it = item(for: download) else { return }
+        it.failed = true
+        Workspace.shared.showToast("Could not download \(it.name)")
     }
 }
 
@@ -319,9 +595,13 @@ struct WebPanelView: View {
                 AddressBar(panel: panel, controller: controller, accent: accent)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
+            if controller.findOpen { FindBar(controller: controller, accent: accent) }
             ZStack {
                 WebRepresentable(panel: panel)
-                if panel.url.isEmpty { WebStartView(panel: panel, controller: controller, accent: accent) }
+                if panel.url.isEmpty && controller.webView.url == nil { WebStartView(panel: panel, controller: controller, accent: accent) }
+                if !controller.downloads.isEmpty {
+                    VStack { Spacer(); HStack { Spacer(); DownloadStrip(controller: controller, accent: accent) } }
+                }
                 if panel.settings.appMode && controller.isLoading {
                     VStack {
                         Rectangle().fill(accent).frame(height: 2)
@@ -403,6 +683,7 @@ struct AddressBar: View {
                         let s = SiteLibrary.shared.saveSite(from: panel)
                         Workspace.shared.showToast("Saved \(s.name) to your sites")
                     } label: { Label("Save as Site", systemImage: "bookmark") }
+                    Button { controller.resetPermissions() } label: { Label("Reset Site Permissions", systemImage: "hand.raised.slash") }
                     Button { controller.clearSiteData() } label: { Label("Clear Site Data", systemImage: "trash") }
                 }
             }
@@ -507,5 +788,45 @@ struct WebStartView: View {
         Workspace.shared.webEpoch[panel.id, default: 0] += 1
         Runtime.shared.releaseWeb(panel.id)
         panel.url = site.url
+    }
+}
+
+// MARK: - Find in page
+
+extension Notification.Name {
+    static let panelsFocusFind = Notification.Name("panelsFocusFind")
+}
+
+struct FindBar: View {
+    @Bindable var controller: WebController
+    let accent: Color
+    @Environment(\.theme) private var theme
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 10.5, weight: .medium)).foregroundStyle(theme.faintC)
+            TextField("Find in page", text: $controller.findText)
+                .textFieldStyle(.plain)
+                .font(Typo.ui(12.5))
+                .foregroundStyle(theme.textC)
+                .focused($focused)
+                .onSubmit { controller.find() }
+                .onChange(of: controller.findText) { _, _ in controller.find() }
+                .onExitCommand { controller.closeFind() }
+            if controller.findFound == false {
+                Text("Not found").font(Typo.ui(11)).foregroundStyle(theme.faintC)
+            }
+            IconButton(symbol: "chevron.up", help: "Previous match (Cmd Shift G)", size: 10, box: 22) { controller.find(backwards: true) }
+            IconButton(symbol: "chevron.down", help: "Next match (Cmd G)", size: 10, box: 22) { controller.find() }
+            IconButton(symbol: "xmark", help: "Close (Escape)", size: 10, box: 22) { controller.closeFind() }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(theme.hover)
+        .onAppear { focused = true }
+        .onReceive(NotificationCenter.default.publisher(for: .panelsFocusFind)) { note in
+            focused = true
+        }
     }
 }

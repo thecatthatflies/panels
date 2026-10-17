@@ -202,6 +202,7 @@ final class TimerModel {
     var interactionTick = 0
     var bonus = 0                       // seconds added with +1 / +5 while running
     @ObservationIgnored private var endDate: Date?
+    @ObservationIgnored private var startedAt: Date?
     @ObservationIgnored private var ticker: Timer?
     @ObservationIgnored weak var panel: Panel?
 
@@ -261,6 +262,7 @@ final class TimerModel {
         finished = false
         running = true
         touch(.start)
+        startedAt = Date()
         endDate = Date().addingTimeInterval(TimeInterval(remaining) / Self.speed)
         ticker?.invalidate()
         ticker = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
@@ -343,11 +345,16 @@ final class TimerModel {
     }
 
     private func complete() {
+        // The end chime only follows a session that really ran in this launch; never a stale or instant finish.
+        let ranFor = Date().timeIntervalSince(startedAt ?? Date()) * Self.speed
+        let genuine = startedAt != nil && ranFor >= 1
         running = false
         ticker?.invalidate(); ticker = nil; endDate = nil
         remaining = 0
-        if SoundSettings.shared.prefs.masterEnabled { Sound.play(.timerEnd) }
-        else if settings.timerSound { NSSound(named: "Glass")?.play() }
+        if genuine {
+            if SoundSettings.shared.prefs.masterEnabled { Sound.play(.timerEnd) }
+            else if settings.timerSound { NSSound(named: "Glass")?.play() }
+        }
         let wasFocus = phase == .focus
         if wasFocus { sessions += 1 }
         finished = true
@@ -389,7 +396,7 @@ struct TimerPanelView: View {
         GeometryReader { geo in
             let w = geo.size.width, h = geo.size.height
             let wideNeeds: CGFloat = 120 + 30 + 300
-            let mode: Mode = (h < 190 || w < 230) ? .compact : ((w / h > 1.45 && h < 460 && w >= wideNeeds) ? .wide : .tall)
+            let mode: Mode = (h < 340 || w < 260) ? .compact : ((w / h > 1.45 && h < 460 && w >= wideNeeds) ? .wide : .tall)
 
             Group {
                 switch mode {

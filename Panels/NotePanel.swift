@@ -381,7 +381,7 @@ struct MarkdownImage: View {
                 AsyncImage(url: u) { phase in
                     switch phase {
                     case .success(let img): img.resizable().scaledToFit()
-                    case .failure: placeholder("Image failed to load")
+                    case .failure: placeholder("Could not load this image")
                     default: placeholder("Loading image")
                     }
                 }
@@ -450,8 +450,16 @@ struct NotePanelView: View {
         return (words, t.count, max(Int((Double(words) / 230).rounded(.up)), words == 0 ? 0 : 1))
     }
 
+    private var showToolbar: Bool {
+        eff.showToolbar && size >= .regular && !ws.focusMode && panel.settings.noteMode != .preview
+    }
+
     var body: some View {
         VStack(spacing: 0) {
+            if showToolbar {
+                NoteToolbar(panel: panel, accent: accent)
+                    .transition(.opacity)
+            }
             Group {
                 switch panel.settings.noteMode {
                 case .edit:
@@ -474,18 +482,6 @@ struct NotePanelView: View {
 
     private var editor: some View {
         MarkdownEditor(panel: panel, settings: eff)
-            .overlay(alignment: .topLeading) {
-                if panel.text.isEmpty {
-                    Text("Start writing. Markdown works as you type.")
-                        .font(Font(eff.face.regular(CGFloat(eff.fontSize)) as CTFont))
-                        .foregroundStyle(theme.faintC)
-                        .padding(CGFloat(eff.padding))
-                        .padding(.leading, eff.measure > 0 ? 0 : 0)
-                        .allowsHitTesting(false)
-                        .transition(.opacity)
-                }
-            }
-            .animation(.snappy(duration: 0.2), value: panel.text.isEmpty)
     }
 
     private var preview: some View {
@@ -636,5 +632,79 @@ private struct FontRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
+    }
+}
+
+
+// MARK: - Formatting toolbar
+
+/// A Docs style toolbar for people who do not know markdown. Every button writes plain markdown into the note.
+struct NoteToolbar: View {
+    @Bindable var panel: Panel
+    let accent: Color
+    @Environment(\.theme) private var theme
+
+    private var host: NoteEditorHost { Runtime.shared.noteHost(for: panel) }
+    private func fmt(_ f: NoteFormat) { host.textView.apply(f) }
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 2) {
+                IconButton(symbol: "arrow.uturn.backward", help: "Undo (Cmd Z)", size: 11.5, box: 26) { host.textView.undoManager?.undo() }
+                IconButton(symbol: "arrow.uturn.forward", help: "Redo (Cmd Shift Z)", size: 11.5, box: 26) { host.textView.undoManager?.redo() }
+                sep
+                headingMenu
+                sep
+                IconButton(symbol: "bold", help: "Bold (Cmd B)", size: 11.5, box: 26) { fmt(.bold) }
+                IconButton(symbol: "italic", help: "Italic (Cmd I)", size: 11.5, box: 26) { fmt(.italic) }
+                IconButton(symbol: "strikethrough", help: "Strikethrough", size: 11.5, box: 26) { fmt(.strike) }
+                IconButton(symbol: "link", help: "Link (Cmd Shift K)", size: 11.5, box: 26) { fmt(.link) }
+                sep
+                IconButton(symbol: "list.bullet", help: "Bulleted list", size: 11.5, box: 26) { fmt(.bullet) }
+                IconButton(symbol: "list.number", help: "Numbered list", size: 11.5, box: 26) { fmt(.numbered) }
+                IconButton(symbol: "checklist", help: "Checklist", size: 11.5, box: 26) { fmt(.checklist) }
+                IconButton(symbol: "text.quote", help: "Quote", size: 11.5, box: 26) { fmt(.quote) }
+                IconButton(symbol: "chevron.left.forwardslash.chevron.right", help: "Code (Cmd E)", size: 11, box: 26) { fmt(.code) }
+                IconButton(symbol: "minus", help: "Divider line", size: 11.5, box: 26) { fmt(.rule) }
+                sep
+                alignMenu
+            }
+            .padding(.horizontal, 10)
+        }
+        .frame(height: 34)
+        .overlay(alignment: .bottom) { Rectangle().fill(theme.hairline).frame(height: 1) }
+    }
+
+    private var sep: some View {
+        Rectangle().fill(theme.hairlineStrong).frame(width: 1, height: 16).padding(.horizontal, 5)
+    }
+
+    private var headingMenu: some View {
+        Menu {
+            Button("Normal text") { fmt(.heading(0)) }
+            Button("Title") { fmt(.heading(1)) }
+            Button("Heading") { fmt(.heading(2)) }
+            Button("Subheading") { fmt(.heading(3)) }
+        } label: {
+            HStack(spacing: 4) {
+                Text("Style").font(Typo.ui(11.5, bold: true))
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+            }
+            .foregroundStyle(theme.mutedC)
+            .padding(.horizontal, 8).frame(height: 24)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .help("Paragraph style")
+    }
+
+    private var alignMenu: some View {
+        IconMenu(symbol: panel.settings.textAlign.symbol, help: "Align text", size: 11.5, box: 26) {
+            ForEach(NoteAlign.allCases) { a in
+                Button { panel.settings.textAlign = a } label: {
+                    if panel.settings.textAlign == a { Label(a.label, systemImage: "checkmark") } else { Label(a.label, systemImage: a.symbol) }
+                }
+            }
+        }
     }
 }

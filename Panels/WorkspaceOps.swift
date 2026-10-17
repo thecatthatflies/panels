@@ -300,7 +300,7 @@ enum FileOps {
         for url in panel.urls {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
             let title = url.deletingPathExtension().lastPathComponent
-            let p = Workspace.shared.addPanel(.note, title: title, text: text)
+            guard let p = Workspace.shared.addPanel(.note, title: title, text: text) else { break }
             p.settings.autoTitle = false
         }
     }
